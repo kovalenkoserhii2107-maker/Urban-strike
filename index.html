@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <title>Stormhawk: Городской удар</title>
+    <meta name="description" content="Вертолётный боевик для телефона: спасай заложников, громи ПВО и боссов над живым мультяшным городом." />
+    <meta name="theme-color" content="#0b1a2b" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Stormhawk" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+
+    <!-- HUD -->
+    <div id="hud" class="hidden">
+      <div class="hud-top">
+        <div class="hud-left">
+          <div class="bar" id="bar-armor"><span class="ico">🛡</span><div class="track"><div class="fill"></div></div></div>
+          <div class="bar" id="bar-fuel"><span class="ico">⛽</span><div class="track"><div class="fill"></div></div></div>
+          <div id="passengers"></div>
+        </div>
+        <div class="hud-center">
+          <div id="objective"><span id="obj-text"></span><b id="obj-progress"></b></div>
+          <div id="boss-bar"><div id="boss-name"></div><div class="track"><div class="fill"></div></div></div>
+        </div>
+        <div class="hud-right">
+          <div class="score-line"><span id="hud-score">0</span><button id="btn-pause" aria-label="Пауза">❚❚</button></div>
+          <div id="hud-lives"></div>
+          <canvas id="radar"></canvas>
+        </div>
+      </div>
+      <div id="hud-combo"></div>
+      <div id="missile-warn">⚠ РАКЕТА НА ХВОСТЕ ⚠</div>
+      <div id="winch-hint" class="hint"></div>
+      <div id="base-hint" class="hint"></div>
+      <div id="toasts"></div>
+      <div id="floaters"></div>
+      <div id="obj-arrow"><div class="chev">➤</div><div class="dist"></div></div>
+      <div id="obj-marker">▼</div>
+      <div id="damage-vignette"></div>
+      <div id="banner"><h2></h2><p></p></div>
+    </div>
+
+    <!-- Сенсорное управление -->
+    <div id="controls" class="hidden">
+      <div id="stick-zone"><div id="stick-base"><div id="stick-knob"></div></div><div class="stick-hint">Веди пальцем<br />для полёта</div></div>
+      <div id="buttons">
+        <button class="abtn flare" data-btn="flare"><span class="lbl">Ловушки</span><b data-ammo="flare">6</b></button>
+        <button class="abtn hellfire" data-btn="hellfire"><span class="lbl">Hellfire</span><b data-ammo="hellfire">8</b></button>
+        <button class="abtn hydra" data-btn="hydra"><span class="lbl">Ракеты</span><b data-ammo="hydra">38</b></button>
+        <button class="abtn gun" data-btn="gun"><span class="lbl">Пулемёт</span><b data-ammo="gun">1200</b></button>
+      </div>
+    </div>
+
+    <!-- Экраны -->
+    <section id="splash" class="screen active">
+      <div class="logo">
+        <div class="logo-heli">🚁</div>
+        <h1>STORM<span>HAWK</span></h1>
+        <p>Городской удар</p>
+      </div>
+      <div class="loader"><div class="loader-fill"></div></div>
+      <div class="loader-text">Собираем город…</div>
+    </section>
+
+    <section id="install" class="screen">
+      <div class="panel install-panel">
+        <div class="ip-info">
+          <div class="app-icon"><img src="./icons/icon-192.png" alt="" /></div>
+          <h2>Установи Stormhawk</h2>
+          <p class="muted">Полноэкранная игра без адресной строки: работает офлайн и запускается с главного экрана, как обычное приложение.</p>
+          <ul class="perks">
+            <li>📱 Во весь экран, без рамок браузера</li>
+            <li>✈️ Играй без интернета</li>
+            <li>⚡ Мгновенный запуск с иконки</li>
+          </ul>
+        </div>
+        <div class="ip-actions">
+          <button class="btn primary big" id="btn-install">Установить приложение</button>
+          <div id="install-ios" class="ios-steps hidden">
+            <p>На iPhone/iPad:</p>
+            <ol>
+              <li>Нажми <b>Поделиться</b> <span class="share-ico">⬆︎</span> внизу Safari</li>
+              <li>Выбери <b>«На экран „Домой“»</b></li>
+              <li>Запусти Stormhawk с главного экрана</li>
+            </ol>
+          </div>
+          <div id="install-manual" class="ios-steps hidden">
+            <p>Открой меню браузера <b>⋮</b> и выбери <b>«Установить приложение»</b> или <b>«Добавить на главный экран»</b>.</p>
+          </div>
+          <button class="btn ghost" id="btn-skip-install">Играть в браузере</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="menu" class="screen">
+      <div class="menu-wrap">
+        <div class="logo small">
+          <h1>STORM<span>HAWK</span></h1>
+          <p>Городской удар</p>
+        </div>
+        <div class="menu-buttons">
+          <button class="btn primary big" id="btn-play">В бой</button>
+          <button class="btn" id="btn-missions">Миссии</button>
+          <button class="btn" id="btn-hangar">Ангар <span class="pill" id="menu-credits"></span></button>
+          <button class="btn" id="btn-settings">Настройки</button>
+          <button class="btn ghost hidden" id="btn-menu-install">⬇ Установить приложение</button>
+        </div>
+      </div>
+      <div class="version">v0.1 · прототип</div>
+    </section>
+
+    <section id="missions" class="screen">
+      <div class="panel wide">
+        <div class="panel-head"><button class="back" data-back="menu">←</button><h2>Кампания</h2></div>
+        <div id="mission-list" class="cards"></div>
+      </div>
+    </section>
+
+    <section id="briefing" class="screen">
+      <div class="panel wide brief">
+        <div class="panel-head"><button class="back" data-back="missions">←</button><h2 id="brief-name"></h2></div>
+        <div class="brief-body">
+          <div class="brief-text">
+            <div class="brief-place" id="brief-place"></div>
+            <p id="brief-story" class="typed"></p>
+            <button class="btn primary big" id="btn-launch">Вылет!</button>
+          </div>
+          <div class="brief-goals">
+            <h3>Задачи</h3>
+            <ol id="brief-goals"></ol>
+            <div class="controls-help">
+              <div><b>Левый палец</b> — полёт</div>
+              <div><b>Пулемёт / Ракеты</b> — держи, наводятся сами</div>
+              <div><b>Hellfire</b> — самонаводящаяся ракета</div>
+              <div><b>Ловушки</b> — сбивают ракеты ЗРК</div>
+              <div><b>Зависни над ящиком или человеком</b> — лебёдка поднимет</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="hangar" class="screen">
+      <div class="panel wide">
+        <div class="panel-head"><button class="back" data-back="menu">←</button><h2>Ангар</h2><div class="credits">💰 <span id="hangar-credits">0</span></div></div>
+        <div id="upgrade-list" class="cards"></div>
+      </div>
+    </section>
+
+    <section id="settings" class="screen">
+      <div class="panel">
+        <div class="panel-head"><button class="back" data-back="menu">←</button><h2>Настройки</h2></div>
+        <div class="setting">
+          <span>Графика</span>
+          <div class="seg" id="quality-seg">
+            <button data-q="auto">Авто</button><button data-q="low">Низкая</button><button data-q="medium">Средняя</button><button data-q="high">Ультра</button>
+          </div>
+        </div>
+        <label class="setting"><span>Звук</span><input type="checkbox" id="opt-sound" /></label>
+        <label class="setting"><span>Музыка</span><input type="checkbox" id="opt-music" /></label>
+        <label class="setting"><span>Вибрация</span><input type="checkbox" id="opt-vibration" /></label>
+        <button class="btn ghost danger" id="btn-reset">Сбросить прогресс</button>
+      </div>
+    </section>
+
+    <section id="pause" class="screen overlay">
+      <div class="panel">
+        <h2>Пауза</h2>
+        <button class="btn primary big" id="btn-resume">Продолжить</button>
+        <button class="btn" id="btn-restart">Начать заново</button>
+        <label class="setting"><span>Звук</span><input type="checkbox" id="opt-sound-p" /></label>
+        <button class="btn ghost" id="btn-quit">Выйти в меню</button>
+      </div>
+    </section>
+
+    <section id="results" class="screen overlay">
+      <div class="panel res-panel">
+        <div class="res-main">
+          <h2 class="win-title">Миссия выполнена!</h2>
+          <div class="stars" id="res-stars"><span>★</span><span>★</span><span>★</span></div>
+          <div class="res-credits">+ <span id="res-credits">0</span> 💰</div>
+          <button class="btn primary big" id="btn-next">Следующая миссия</button>
+          <div class="row">
+            <button class="btn" id="btn-res-hangar">Ангар</button>
+            <button class="btn ghost" id="btn-res-menu">Меню</button>
+          </div>
+        </div>
+        <div class="res-table" id="res-table"></div>
+      </div>
+    </section>
+
+    <section id="gameover" class="screen overlay">
+      <div class="panel">
+        <h2 class="lose-title">Миссия провалена</h2>
+        <p class="muted">Все вертолёты потеряны. Прокачай броню в ангаре и попробуй снова.</p>
+        <button class="btn primary big" id="btn-retry">Повторить</button>
+        <div class="row">
+          <button class="btn" id="btn-go-hangar">Ангар</button>
+          <button class="btn ghost" id="btn-go-menu">Меню</button>
+        </div>
+      </div>
+    </section>
+
+    <div id="wipe"></div>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
