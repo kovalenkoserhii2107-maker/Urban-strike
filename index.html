@@ -73,6 +73,15 @@
       </div>
       <div class="loader"><div class="loader-fill"></div></div>
       <div class="loader-text">Поднимаем остров из океана…</div>
+      <div class="boot-fail" id="boot-fail" hidden>
+        <b>Игра не загрузилась</b>
+        <p id="boot-error">Возможно, в памяти осталась старая версия.</p>
+        <div class="row">
+          <button class="btn" onclick="location.reload()">Перезагрузить</button>
+          <button class="btn primary" onclick="window.__hardReset()">Очистить кэш и обновить</button>
+        </div>
+      </div>
+      <div class="version-tag" id="version-splash"></div>
     </section>
 
     <section id="install" class="screen">
@@ -119,7 +128,8 @@
           <button class="btn ghost hidden" id="btn-menu-install">⬇ Установить приложение</button>
         </div>
       </div>
-      <div class="version">v0.3 · открытый мир</div>
+      <button class="btn primary hidden" id="btn-update">⟳ Доступна новая версия — обновить</button>
+      <div class="version" id="version-menu"></div>
     </section>
 
     <section id="missions" class="screen">
@@ -179,6 +189,8 @@
         <label class="setting"><span>Музыка</span><input type="checkbox" id="opt-music" /></label>
         <label class="setting"><span>Вибрация</span><input type="checkbox" id="opt-vibration" /></label>
         <button class="btn ghost danger" id="btn-reset">Сбросить прогресс</button>
+        <button class="btn ghost" onclick="window.__hardReset()">Очистить кэш приложения</button>
+        <div class="muted version-line" id="version-settings"></div>
       </div>
     </section>
 
@@ -230,6 +242,34 @@
     
 
     <div id="wipe"></div>
+    <script>
+      // Сторож загрузки: работает, даже если основной модуль не запустился.
+      (function () {
+        function fail(msg) {
+          var box = document.getElementById('boot-fail');
+          if (!box || window.__stormhawkReady) return;
+          box.hidden = false;
+          if (msg) document.getElementById('boot-error').textContent = msg;
+        }
+        window.__bootFail = fail;
+        window.__bootTimer = setTimeout(function () { fail(''); }, 25000);
+        window.addEventListener('error', function (e) {
+          var t = e.target;
+          if (t && (t.src || t.href)) fail('Не удалось загрузить файл: ' + String(t.src || t.href).split('/').pop());
+          else fail((e.message || 'Ошибка') + (e.lineno ? ' (' + String(e.filename).split('/').pop() + ':' + e.lineno + ')' : ''));
+        }, true);
+        window.addEventListener('unhandledrejection', function (e) {
+          fail(String((e.reason && e.reason.message) || e.reason));
+        });
+        window.__hardReset = function () {
+          var done = function () { location.reload(); };
+          var jobs = [];
+          if (navigator.serviceWorker) jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); }));
+          if (window.caches) jobs.push(caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); }));
+          Promise.all(jobs).then(done, done);
+        };
+      })();
+    </script>
     <script type="module" src="./src/main.js"></script>
   </body>
 </html>

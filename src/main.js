@@ -5,7 +5,12 @@ import { MapScreen } from './ui/map.js';
 import { save, persist, resetProgress } from './core/save.js';
 import { isStandalone, isIOS, canPrompt, promptInstall, onInstallChange, registerSW, goFullscreen } from './pwa.js';
 
-registerSW();
+const VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev';
+// Новая версия: на заставке перезагружаемся сразу, в меню и в игре — по кнопке.
+registerSW(() => {
+  if (!window.__stormhawkReady) location.reload();
+  else document.querySelector('#btn-update')?.classList.remove('hidden');
+});
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -306,6 +311,16 @@ function showResults(r) {
 
 // ---------- запуск ----------
 async function boot() {
+  clearTimeout(window.__bootTimer);
+  for (const id of ['#version-splash', '#version-menu', '#version-settings']) $(id).textContent = 'Версия ' + VERSION;
+  try {
+    await bootInner();
+  } catch (err) {
+    window.__bootFail?.(err?.message || String(err));
+  }
+}
+
+async function bootInner() {
   const fill = $('.loader-fill');
   const text = $('.loader-text');
   fill.style.width = '15%';
@@ -320,8 +335,7 @@ async function boot() {
       onComplete: (r) => showResults(r),
     }, save);
   } catch (err) {
-    text.textContent = 'Не удалось запустить WebGL: ' + err.message;
-    return;
+    throw new Error('Не удалось запустить WebGL: ' + err.message);
   }
   window.__game = game;
   game.audio.setEnabled(save.settings.sound);
@@ -342,6 +356,7 @@ async function boot() {
   text.textContent = 'Готово!';
   await new Promise((r) => setTimeout(r, 300));
   const skip = session.get('install-skipped');
+  window.__stormhawkReady = true;
   await transition(() => {
     if (!isStandalone() && !skip && !embedded) openInstall();
     else goMenu();
@@ -408,6 +423,10 @@ onInstallChange(() => {
 });
 
 $('#btn-play').addEventListener('click', () => launch());
+$('#btn-update').addEventListener('click', () => {
+  persist();
+  location.reload();
+});
 $('#btn-missions').addEventListener('click', () => {
   click();
   renderStory();
