@@ -143,7 +143,7 @@ export class HUD {
         distEl.style.color = rp.alive ? '#a0c0d0' : '#ff4b4b';
       }
       if (pingEl && game.net) {
-        pingEl.textContent = `📶 ${game.net.ping || 0}мс`;
+        pingEl.textContent = game.net.status === 'reconnecting' ? '📶 нет связи…' : `📶 ${game.net.ping || 0}мс`;
       }
     } else if (wmEl) {
       wmEl.classList.add('hidden');

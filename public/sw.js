@@ -21,7 +21,10 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;
-  if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
+  const url = new URL(req.url);
+  if (req.method !== 'GET' || url.origin !== self.location.origin) return;
+  // проверка сервера совместной игры — всегда по сети, без кэша
+  if (url.pathname.endsWith('/__coop')) return;
 
   if (req.mode === 'navigate') {
     // Сначала сеть (чтобы получать обновления), при офлайне — кэш.

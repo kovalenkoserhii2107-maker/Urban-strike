@@ -97,7 +97,12 @@ export class RemotePlayer {
     if (msg.armor !== undefined) this.armor = msg.armor;
     if (msg.maxArmor !== undefined) this.maxArmor = msg.maxArmor;
     if (msg.fuel !== undefined) this.fuel = msg.fuel;
-    if (msg.alive !== undefined) this.alive = msg.alive;
+    if (msg.alive !== undefined) {
+      if (this.alive && !msg.alive) this.die(); // взрыв там, где его сбили
+      this.alive = msg.alive;
+      // после возрождения враги снова должны видеть его целью
+      this.state = msg.alive ? 'fly' : 'dying';
+    }
 
     this.winch = msg.winch || null;
     this.lastReceived = performance.now();
@@ -146,12 +151,10 @@ export class RemotePlayer {
     return this.pos;
   }
 
-  damage(dmg, srcPos) {
-    this.armor -= dmg;
+  // Попадания по напарнику видны и здесь, но броню считает его
+  // устройство: иначе он «умирал» бы у нас, оставаясь живым у себя.
+  damage() {
     this.game.fx.spark(this.pos.x, this.pos.y, this.pos.z, 4);
-    if (this.armor <= 0 && this.alive) {
-      this.die();
-    }
   }
 
   die() {
