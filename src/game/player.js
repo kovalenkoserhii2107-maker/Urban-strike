@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { createHeli } from './models.js';
+import { createViper } from './viper.js';
 import { toon, glow, G } from './materials.js';
 import { clamp, damp, turnTowards, wrapAngle, dist2D } from '../core/utils.js';
 import { MAP } from './world.js';
@@ -21,7 +21,7 @@ export class Player {
     this.maxAmmo = { gun: 1200, hydra: 38 + u.rockets * 10, hellfire: 8 + u.rockets * 2 };
     this.capacity = 6;
 
-    const m = createHeli('player');
+    const m = createViper(game.save.skin);
     this.model = m;
     this.obj = m.group;
     game.scene.add(this.obj);
@@ -92,6 +92,7 @@ export class Player {
     m.rotor.rotation.y += dt * (this.state === 'dead' ? 0 : 32);
     m.tailRotor.rotation.x += dt * 45;
     m.disc.material.opacity = this.state === 'dead' ? 0 : 0.1 + Math.sin(g.time * 40) * 0.03;
+    m.tailDisc.material.opacity = this.state === 'dead' ? 0 : 0.12;
     m.beacon.visible = Math.sin(g.time * 6) > 0.3;
 
     if (this.state === 'dying') return this.updateDying(dt);
@@ -184,11 +185,39 @@ export class Player {
     const along = this.vel.x * fwdX + this.vel.z * fwdZ;
     const side = this.vel.x * fwdZ - this.vel.z * fwdX;
     this.applyTransform(dt, along, side);
+    this.updateWeaponsVisual(dt);
 
     // рябь от винта над водой/землёй
     if (this.pos.y < 20 && Math.random() < 0.3) {
       const a = Math.random() * Math.PI * 2;
       g.fx.dust(this.pos.x + Math.cos(a) * 5, this.pos.z + Math.sin(a) * 5, 1);
+    }
+  }
+
+  // Пушка следит за целью, стволы крутятся, на крыльях видно сколько осталось Hellfire,
+  // а повреждённые двигатели дымят.
+  updateWeaponsVisual(dt) {
+    const m = this.model;
+    let yaw = 0, pitch = 0.3;
+    if (this.target) {
+      this.obj.updateMatrixWorld();
+      const local = this.obj.worldToLocal(_v.copy(this.target.aimPoint())).sub(m.gunTurret.position);
+      yaw = clamp(Math.atan2(local.x, local.z), -1.9, 1.9);
+      pitch = clamp(Math.atan2(-local.y, Math.hypot(local.x, local.z)), -0.2, 1.25);
+    }
+    m.gunTurret.rotation.y = damp(m.gunTurret.rotation.y, yaw, 10, dt);
+    m.gunPitch.rotation.x = damp(m.gunPitch.rotation.x, pitch, 10, dt);
+    if (this.gunSpin > 0) {
+      this.gunSpin -= dt;
+      m.barrels.rotation.z += dt * 45;
+    }
+    const shown = Math.ceil((this.ammo.hellfire / this.maxAmmo.hellfire) * m.hellfires.length);
+    m.hellfires.forEach((h, i) => (h.visible = i < shown));
+    const hp = this.armor / this.maxArmor;
+    if (hp < 0.5 && Math.random() < (0.5 - hp) * 1.6) {
+      const ex = m.exhausts[Math.random() < 0.5 ? 0 : 1].getWorldPosition(_v);
+      this.game.fx.puff(ex.x, ex.y, ex.z, hp < 0.25 ? 1.6 : 1.1, false, 1.5);
+      if (hp < 0.25 && Math.random() < 0.15) this.game.fx.spark(ex.x, ex.y, ex.z, 2);
     }
   }
 
@@ -257,6 +286,7 @@ export class Player {
     if (this.cool.gun > 0) return;
     if (this.ammo.gun <= 0) return this.dry();
     this.cool.gun = 1 / 12;
+    this.gunSpin = 0.2;
     this.ammo.gun--;
     const g = this.game;
     const from = this.model.nose.getWorldPosition(new THREE.Vector3());
@@ -286,7 +316,10 @@ export class Player {
     this.cool.hellfire = 0.7;
     this.ammo.hellfire--;
     const g = this.game;
-    const from = this.model.podL.getWorldPosition(new THREE.Vector3());
+    // ракета уходит с той подвески, где она висела
+    const rack = this.model.hellfires;
+    const shown = Math.ceil(((this.ammo.hellfire + 1) / this.maxAmmo.hellfire) * rack.length);
+    const from = rack[clamp(shown - 1, 0, rack.length - 1)].getWorldPosition(new THREE.Vector3());
     const dir = new THREE.Vector3(Math.sin(this.yaw), -0.25, Math.cos(this.yaw));
     g.projectiles.spawn('hellfire', 'player', from, dir, { mult: this.rocketMult, target: this.target });
     g.fx.puff(from.x, from.y, from.z, 2, true);
