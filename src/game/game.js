@@ -54,7 +54,14 @@ export class Game {
     this.waypoint = null;
     this.setQuality(save.settings.quality, false);
     this.renderer.shadowMap.enabled = this.qualityLevel !== 'low';
-    window.addEventListener('resize', () => this.resize());
+    const onResize = () => {
+      this.resize();
+      // iOS сообщает итоговый размер с задержкой после поворота
+      setTimeout(() => this.resize(), 300);
+    };
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+    window.visualViewport?.addEventListener('resize', onResize);
     this.resize();
     this.last = performance.now();
     this.loop = this.loop.bind(this);
@@ -114,7 +121,9 @@ export class Game {
   }
 
   resize() {
-    const w = window.innerWidth, h = window.innerHeight;
+    // размер берём у самого холста: он растянут на весь экран через CSS
+    const c = this.renderer.domElement;
+    const w = c.clientWidth || window.innerWidth, h = c.clientHeight || window.innerHeight;
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();

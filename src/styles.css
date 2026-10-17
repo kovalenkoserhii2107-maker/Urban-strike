@@ -36,12 +36,16 @@ body {
   touch-action: none;
 }
 
+/* холст на весь экран: в установленном приложении iOS 100vh/100dvh
+   бывают меньше реального экрана, поэтому только inset */
 #game {
   position: fixed;
-  inset: 0;
-  width: 100vw;
-  height: 100vh;
-  height: 100dvh;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 100%;
   display: block;
 }
 
