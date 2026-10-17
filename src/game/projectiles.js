@@ -149,20 +149,27 @@ export class Projectiles {
             break;
           }
         }
-      } else if (player.alive && !hit) {
-        const c = player.pos;
-        const dist = segmentPointDist(p.prev.x, p.prev.y, p.prev.z, p.pos.x, p.pos.y, p.pos.z, c.x, c.y, c.z);
-        if (d.flak && dist < 4.5) {
-          this.explode(p, p.pos.x, p.pos.y, p.pos.z);
-          hit = true;
-        } else if (dist < (d.rocket ? 2.8 : 2.4)) {
-          player.damage(p.dmg, p.pos);
-          if (d.splash > 0) {
-            g.fx.explosion(p.pos.x, p.pos.y, p.pos.z, 0.6);
-            g.audio.play('boom', p.pos.x, p.pos.z);
-          } else g.fx.spark(p.pos.x, p.pos.y, p.pos.z, 4);
-          p.alive = false;
-          hit = true;
+      } else if (!hit) {
+        const targets = [];
+        if (player.alive) targets.push(player);
+        if (g.remotePlayer && g.remotePlayer.alive) targets.push(g.remotePlayer);
+        for (const target of targets) {
+          const c = target.pos;
+          const dist = segmentPointDist(p.prev.x, p.prev.y, p.prev.z, p.pos.x, p.pos.y, p.pos.z, c.x, c.y, c.z);
+          if (d.flak && dist < 4.5) {
+            this.explode(p, p.pos.x, p.pos.y, p.pos.z);
+            hit = true;
+            break;
+          } else if (dist < (d.rocket ? 2.8 : 2.4)) {
+            target.damage(p.dmg, p.pos);
+            if (d.splash > 0) {
+              g.fx.explosion(p.pos.x, p.pos.y, p.pos.z, 0.6);
+              g.audio.play('boom', p.pos.x, p.pos.z);
+            } else g.fx.spark(p.pos.x, p.pos.y, p.pos.z, 4);
+            p.alive = false;
+            hit = true;
+            break;
+          }
         }
       }
       if (!hit && p.target && p.target.isFlare && p.pos.distanceTo(p.target.pos) < 3) {
@@ -213,7 +220,7 @@ export class Projectiles {
   // Ракеты ЗРК, которые сейчас ведут игрока (для предупреждения на HUD).
   incomingMissiles() {
     let n = 0;
-    for (const p of this.list) if (p.def.sam && p.target === this.game.player) n++;
+    for (const p of this.list) if (p.def.sam && (p.target === this.game.player || p.target === this.game.remotePlayer)) n++;
     return n;
   }
 
