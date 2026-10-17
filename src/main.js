@@ -567,4 +567,169 @@ document.addEventListener('visibilitychange', () => {
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 document.addEventListener('dblclick', (e) => e.preventDefault());
 
+
+// ---------- Совместная игра (Wi-Fi) ----------
+let coopRole = 'host';
+let coopTransport = 'ws';
+let coopReady = false;
+
+$('#btn-coop')?.addEventListener('click', () => {
+  click();
+  show('coop');
+  initCoopUI();
+});
+
+function initCoopUI() {
+  const badge = $('#coop-status-badge');
+  const launchBtn = $('#btn-launch-coop');
+  const partnerInfo = $('#coop-partner-info');
+
+  // Вкладки LAN / WebRTC
+  $('#tab-btn-lan')?.addEventListener('click', () => {
+    click();
+    coopTransport = 'ws';
+    $('#tab-btn-lan').classList.add('on');
+    $('#tab-btn-webrtc').classList.remove('on');
+    $('#tab-lan').classList.remove('hidden');
+    $('#tab-webrtc').classList.add('hidden');
+  });
+
+  $('#tab-btn-webrtc')?.addEventListener('click', () => {
+    click();
+    coopTransport = 'webrtc';
+    $('#tab-btn-webrtc').classList.add('on');
+    $('#tab-btn-lan').classList.remove('on');
+    $('#tab-webrtc').classList.remove('hidden');
+    $('#tab-lan').classList.add('hidden');
+  });
+
+  // Выбор карточки роли (Хост / Клиент)
+  $$('.coop-card').forEach((card) => {
+    card.addEventListener('click', (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
+      $$('.coop-card').forEach((c) => c.classList.remove('active'));
+      card.classList.add('active');
+      coopRole = card.dataset.role;
+    });
+  });
+
+  // Создать лобби (Хост)
+  $('#btn-create-host')?.addEventListener('click', () => {
+    click();
+    coopRole = 'host';
+    badge.className = 'badge idle';
+    badge.textContent = 'Статус: Ожидание подключения напарника…';
+    const port = $('#host-port').value || '8080';
+    const hostUrl = `ws://${location.hostname || 'localhost'}:${port}`;
+    game.net.connectWS(hostUrl, 'host', () => {
+      badge.textContent = 'Хост активен. Ждём второго игрока…';
+    }, (err) => {
+      badge.textContent = 'Запустите: node server.js';
+    });
+  });
+
+  // Подключиться (Клиент)
+  $('#btn-join-client')?.addEventListener('click', () => {
+    click();
+    coopRole = 'client';
+    const ip = $('#client-ip').value.trim() || `${location.hostname || 'localhost'}:8080`;
+    const wsUrl = ip.startsWith('ws://') ? ip : `ws://${ip}`;
+    badge.className = 'badge idle';
+    badge.textContent = `Подключение к ${ip}…`;
+    game.net.connectWS(wsUrl, 'client', () => {
+      badge.className = 'badge connected';
+      badge.textContent = 'Подключено к Хосту!';
+      launchBtn.disabled = false;
+      partnerInfo.classList.remove('hidden');
+      partnerInfo.innerHTML = 'Напарник: <b>Ведущий (Хост)</b>';
+    }, (err) => {
+      badge.className = 'badge idle';
+      badge.textContent = 'Ошибка: проверьте IP адрес и Wi-Fi';
+    });
+  });
+
+  // WebRTC P2P
+  $('#btn-p2p-offer')?.addEventListener('click', async () => {
+    click();
+    coopRole = 'host';
+    coopTransport = 'webrtc';
+    badge.textContent = 'Генерация кода комнаты…';
+    await game.net.initWebRTC('host', (signal) => {
+      if (signal.type === 'offer') {
+        const code = btoa(JSON.stringify(signal));
+        $('#p2p-code').value = code;
+        badge.textContent = 'Код создан! Отправьте его напарнику';
+      }
+    }, () => {
+      badge.className = 'badge connected';
+      badge.textContent = 'P2P соединение установлено!';
+      launchBtn.disabled = false;
+      partnerInfo.classList.remove('hidden');
+    });
+  });
+
+  $('#btn-p2p-answer')?.addEventListener('click', async () => {
+    click();
+    coopRole = 'client';
+    coopTransport = 'webrtc';
+    const raw = $('#p2p-code').value.trim();
+    if (!raw) return alert('Сначала вставьте код от Хоста!');
+    try {
+      const signal = JSON.parse(atob(raw));
+      await game.net.initWebRTC('client', null, () => {
+        badge.className = 'badge connected';
+        badge.textContent = 'P2P соединение установлено!';
+        launchBtn.disabled = false;
+        partnerInfo.classList.remove('hidden');
+      });
+      const answer = await game.net.handleWebRTCSignal(signal);
+      if (answer) {
+        $('#p2p-code').value = btoa(JSON.stringify(answer));
+        badge.textContent = 'Ответный код создан! Отправьте его Хосту';
+      }
+    } catch {
+      alert('Неверный код подключения!');
+    }
+  });
+
+  $('#btn-p2p-apply')?.addEventListener('click', async () => {
+    click();
+    const raw = $('#p2p-code').value.trim();
+    if (!raw) return;
+    try {
+      const signal = JSON.parse(atob(raw));
+      await game.net.handleWebRTCSignal(signal);
+      badge.className = 'badge connected';
+      badge.textContent = 'P2P рукопожатие завершено!';
+      launchBtn.disabled = false;
+    } catch {
+      alert('Неверный код ответа!');
+    }
+  });
+
+  $('#btn-p2p-copy')?.addEventListener('click', () => {
+    click();
+    const ta = $('#p2p-code');
+    ta.select();
+    navigator.clipboard?.writeText(ta.value);
+    badge.textContent = 'Код скопирован в буфер обмена!';
+  });
+
+  // Отслеживание подключения напарника
+  game.net.on('peer_hello', () => {
+    badge.className = 'badge connected';
+    badge.textContent = 'Напарник на связи!';
+    launchBtn.disabled = false;
+    partnerInfo.classList.remove('hidden');
+    partnerInfo.innerHTML = `Напарник: <b>${coopRole === 'host' ? 'Ведомый (P2)' : 'Ведущий (P1)'}</b> готов!`;
+  });
+
+  // Кнопка Взлёт
+  launchBtn.addEventListener('click', () => {
+    click();
+    hideScreens();
+    game.startCoop(coopRole, coopTransport);
+  });
+}
+
 boot();
