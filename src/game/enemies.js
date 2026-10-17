@@ -75,15 +75,22 @@ export class Enemy {
     return this.game.world.heightAt(this.pos.x, this.pos.z);
   }
   player() {
-    const p = this.game.player;
-    return p.alive && p.state === 'fly' ? p : null;
+    const g = this.game;
+    const p1 = g.player && g.player.alive && g.player.state === 'fly' ? g.player : null;
+    const p2 = g.remotePlayer && g.remotePlayer.alive && g.remotePlayer.state === 'fly' ? g.remotePlayer : null;
+    if (p1 && p2) {
+      const d1 = dist2D(p1.pos.x, p1.pos.z, this.pos.x, this.pos.z);
+      const d2 = dist2D(p2.pos.x, p2.pos.z, this.pos.x, this.pos.z);
+      return d1 <= d2 ? p1 : p2;
+    }
+    return p1 || p2;
   }
   inRange(r) {
     const p = this.player();
     return p && dist2D(p.pos.x, p.pos.z, this.pos.x, this.pos.z) < r ? p : null;
   }
   lead(from, speed, factor = 0.75) {
-    const p = this.game.player;
+    const p = this.player() || this.game.player;
     const t = from.distanceTo(p.pos) / speed;
     return _v.copy(p.pos).addScaledVector(p.vel, t * factor);
   }
@@ -217,7 +224,13 @@ export class Rescuee {
       this.obj.rotation.y += dt * 2;
       return;
     }
-    const p = this.game.player;
+    const g = this.game;
+    const p1 = g.player;
+    const p2 = g.remotePlayer;
+    let p = p1;
+    if (p2 && p2.alive && (!p1.alive || dist2D(p2.pos.x, p2.pos.z, this.pos.x, this.pos.z) < dist2D(p1.pos.x, p1.pos.z, this.pos.x, this.pos.z))) {
+      p = p2;
+    }
     const near = p.alive && dist2D(p.pos.x, p.pos.z, this.pos.x, this.pos.z) < 40;
     const wave = near ? 14 : 5;
     this.model.arms[0].rotation.x = -2.6 + Math.sin(this.t * wave) * 0.5;

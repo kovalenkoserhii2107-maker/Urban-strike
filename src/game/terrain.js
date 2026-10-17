@@ -3,23 +3,31 @@ import { fbm, ridged } from './noise.js';
 import { addDetail } from './materials.js';
 import { T } from './textures.js';
 
-// Остров ~1600×1600 м: рельеф, побережье, горы на северо-западе,
-// выровненные площадки под город, базы и деревни, трассы между ними.
+// Расширенный остров ~2400×2400 м (мир 2800×2800 м): разнообразный рельеф,
+// Порт-Лазурь, Промзона, Авиабаза, Бухта Нефтяников, РЛС «Купол», Дамба Чёрного Ущелья,
+// Курорт «Золотые Пески», горный бункер «Объект-42», 5 деревень и 14 аванпостов.
 
-export const WORLD = { half: 1000, waterY: -2.2, step: 4 };
+export const WORLD = { half: 1400, waterY: -2.2, step: 5 };
 
 export const LAYOUT = {
   city: { name: 'Порт-Лазурь', x: -120, z: 260, hx: 262, hz: 262 },
   fob: { name: 'База «Сокол»', x: -120, z: 640, hx: 55, hz: 55 },
   industrial: { name: 'Промзона «Северсталь»', x: 470, z: 300, hx: 175, hz: 150 },
   airbase: { name: 'Авиабаза Кроста', x: 410, z: -380, hx: 300, hz: 125 },
-  mountains: { name: 'Хребет Ястреба', x: -470, z: -420, r: 400 },
+  mountains: { name: 'Хребет Ястреба', x: -520, z: -480, r: 480 },
+  // Новые разнообразные районы:
+  refinery: { name: 'Бухта Нефтяников', x: 860, z: -160, hx: 190, hz: 160 },
+  radar: { name: 'РЛС «Купол»', x: 200, z: -880, hx: 170, hz: 150 },
+  dam: { name: 'Дамба Чёрного Ущелья', x: -840, z: -160, hx: 160, hz: 150 },
+  resort: { name: 'Курорт «Золотые Пески»', x: 620, z: 760, hx: 200, hz: 170 },
+  bunker: { name: 'Бункер «Объект-42»', x: -580, z: -880, hx: 160, hz: 150 },
   villages: [
     { name: 'Озёрное', x: -600, z: 250, r: 75 },
     { name: 'Развилка', x: 60, z: -130, r: 70 },
     { name: 'Верхний Брод', x: -270, z: -580, r: 70 },
+    { name: 'Сосновый Бор', x: -740, z: 560, r: 80 },
+    { name: 'Рыбачья Заводь', x: 920, z: 320, r: 75 },
   ],
-  // вражеские аванпосты: после зачистки становятся нашими точками дозаправки
   outposts: [
     { id: 'op1', name: 'Аванпост «Утёс»', x: -560, z: -120 },
     { id: 'op2', name: 'Аванпост «Поле»', x: -60, z: -400 },
@@ -29,6 +37,12 @@ export const LAYOUT = {
     { id: 'op6', name: 'Аванпост «Сосны»', x: -430, z: 520 },
     { id: 'op7', name: 'Аванпост «Пик»', x: -640, z: -540 },
     { id: 'op8', name: 'Аванпост «Север»', x: -90, z: -660 },
+    { id: 'op9', name: 'Аванпост «Терминал»', x: 740, z: -320 },
+    { id: 'op10', name: 'Аванпост «Радар»', x: 420, z: -820 },
+    { id: 'op11', name: 'Аванпост «Каньон»', x: -720, z: -350 },
+    { id: 'op12', name: 'Аванпост «Лагуна»', x: 480, z: 920 },
+    { id: 'op13', name: 'Аванпост «Бункер»', x: -420, z: -940 },
+    { id: 'op14', name: 'Аванпост «Восток»', x: 960, z: 80 },
   ],
 };
 
@@ -41,6 +55,15 @@ export const HIGHWAYS = [
   [[-362, 260], [-450, 255], [-525, 252]],
   [[-240, 18], [-250, -150], [-235, -300], [-265, -450], [-270, -510]],
   [[60, -130], [220, -100], [330, 40], [420, 150]],
+  // Дополнительные трассы к новым районам:
+  [[560, -380], [680, -320], [770, -240], [860, -160]],
+  [[320, -450], [280, -600], [240, -750], [200, -840]],
+  [[-600, 320], [-660, 420], [-720, 500]],
+  [[-65, 640], [140, 680], [360, 720], [520, 750]],
+  [[550, 450], [580, 580], [620, 700]],
+  [[-670, 250], [-740, 100], [-800, -40], [-840, -140]],
+  [[-270, -650], [-360, -760], [-480, -840], [-560, -870]],
+  [[640, 300], [780, 310], [880, 320]],
 ];
 
 const smooth = (a, b, x) => {
@@ -49,10 +72,10 @@ const smooth = (a, b, x) => {
 };
 
 export function landSdf(x, z) {
-  const L = 790, R = 330;
+  const L = 1180, R = 440;
   const qx = Math.abs(x) - (L - R), qz = Math.abs(z) - (L - R);
   const d = Math.hypot(Math.max(qx, 0), Math.max(qz, 0)) + Math.min(Math.max(qx, qz), 0) - R;
-  return d + fbm(x * 0.004, z * 0.004, 3, 91) * 70;
+  return d + fbm(x * 0.003, z * 0.003, 3, 91) * 90;
 }
 
 function rectDist(z, x, y) {
@@ -64,11 +87,11 @@ function rectDist(z, x, y) {
 function baseHeight(x, z) {
   const sdf = landSdf(x, z);
   if (sdf > 0) return WORLD.waterY - 1.5 - Math.min(sdf * 0.08, 25);
-  const hills = (fbm(x * 0.0035, z * 0.0035, 4, 1) * 0.5 + 0.5) * 30 + fbm(x * 0.013, z * 0.013, 3, 2) * 3;
+  const hills = (fbm(x * 0.0028, z * 0.0028, 4, 1) * 0.5 + 0.5) * 35 + fbm(x * 0.011, z * 0.011, 3, 2) * 4;
   const M = LAYOUT.mountains;
-  const m = smooth(M.r, M.r * 0.2, Math.hypot(x - M.x, z - M.z));
-  let h = hills * (1 - m * 0.4) + ridged(x * 0.0055, z * 0.0055, 5, 3) * 150 * m;
-  h = WORLD.waterY + 1.0 + (h - WORLD.waterY - 1.0) * smooth(0, -110, sdf);
+  const m = smooth(M.r, M.r * 0.15, Math.hypot(x - M.x, z - M.z));
+  let h = hills * (1 - m * 0.4) + ridged(x * 0.0045, z * 0.0045, 5, 3) * 165 * m;
+  h = WORLD.waterY + 1.0 + (h - WORLD.waterY - 1.0) * smooth(0, -120, sdf);
   return h;
 }
 
@@ -94,7 +117,13 @@ export class Terrain {
       for (let i = 0; i < n; i++) this.h[this.idx(i, j)] = baseHeight(this.gx(i), this.gx(j));
 
     // выравниваем площадки регионов
-    const rects = [LAYOUT.city, LAYOUT.fob, LAYOUT.industrial, LAYOUT.airbase].map((z) => ({ ...z, h: 0, fade: 80 }));
+    const rects = [
+      LAYOUT.city, LAYOUT.fob, LAYOUT.industrial, LAYOUT.airbase,
+      LAYOUT.refinery, LAYOUT.resort,
+      { ...LAYOUT.radar, h: 36, fade: 80 },
+      { ...LAYOUT.dam, h: 22, fade: 70 },
+      { ...LAYOUT.bunker, h: 78, fade: 80 },
+    ].map((z) => ({ ...z, h: z.h ?? 0, fade: z.fade ?? 80 }));
     const circles = [
       ...LAYOUT.villages.map((v) => ({ ...v, h: Math.max(0.5, this.sample(v.x, v.z) * 0.85), fade: 60 })),
       ...LAYOUT.outposts.map((o) => ({ ...o, r: 24, h: Math.max(0.6, this.sample(o.x, o.z)), fade: 30 })),
@@ -247,6 +276,11 @@ export class Terrain {
             if (hh > 112) col.lerp(C.snow, smooth(112, 135, hh) * (1 - smooth(0.9, 1.4, slope)));
             if (rectDist(LAYOUT.airbase, x, z) < 1) col.lerp(C.mown, 0.7);
             if (rectDist(LAYOUT.industrial, x, z) < 1 || rectDist(LAYOUT.fob, x, z) < 1) col.lerp(C.dirt, 0.65);
+            if (rectDist(LAYOUT.refinery, x, z) < 1) col.lerp(C.roadside, 0.7);
+            if (rectDist(LAYOUT.radar, x, z) < 1) col.lerp(C.rock, 0.55);
+            if (rectDist(LAYOUT.resort, x, z) < 1) col.lerp(C.sand, 0.65);
+            if (rectDist(LAYOUT.dam, x, z) < 1) col.lerp(C.rock, 0.7);
+            if (rectDist(LAYOUT.bunker, x, z) < 1) col.lerp(C.rock, 0.8);
             for (const vg of villages) {
               const d = Math.hypot(x - vg.x, z - vg.z);
               if (d > vg.r * 0.55 && d < vg.r + 70) {

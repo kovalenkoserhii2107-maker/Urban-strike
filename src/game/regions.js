@@ -353,7 +353,10 @@ export function setOutpostOwner(world, id, owner) {
 // ---------- природа: леса, горы, пляжи, лодки ----------
 function buildNature(world) {
   const rng = world.rng, t = world.terrain, D = world.density;
-  const zones = [LAYOUT.city, LAYOUT.fob, LAYOUT.industrial, LAYOUT.airbase];
+  const zones = [
+    LAYOUT.city, LAYOUT.fob, LAYOUT.industrial, LAYOUT.airbase,
+    LAYOUT.refinery, LAYOUT.radar, LAYOUT.dam, LAYOUT.resort, LAYOUT.bunker
+  ];
   const inZone = (x, z, pad) => zones.some((r) => Math.abs(x - r.x) < r.hx + pad && Math.abs(z - r.z) < r.hz + pad);
   const M = LAYOUT.mountains;
   const sp = 8;
@@ -444,10 +447,226 @@ function findPeaks(world) {
   world.sites.mountains = peaks;
 }
 
+
+// ---------- Бухта Нефтяников ----------
+function buildRefinery(world) {
+  const R = LAYOUT.refinery, S = world.surfaces;
+  const y = 0;
+  S.asphalt.quad(R.x - R.hx, R.z - R.hz, R.x + R.hx, R.z + R.hz, 0.05);
+  S.concrete.slab(R.x - 120, R.z - 100, R.x + 120, R.z + 100, 0, 0.15);
+  
+  // 4 цилиндрических нефтяных резервуара
+  for (let i = 0; i < 4; i++) {
+    const rx = R.x - 70 + (i % 2) * 140, rz = R.z - 50 + Math.floor(i / 2) * 100;
+    const tank = new THREE.Group();
+    const body = new THREE.Mesh(G.cyl(18, 18, 14, 24), pbr(i % 2 ? 0xeae6da : 0x7a8288, { roughness: 0.5, metalness: 0.6 }));
+    body.position.y = 7;
+    tank.add(body);
+    const roof = new THREE.Mesh(G.cone(18.2, 2.5, 24), pbr(0x5a6068, { roughness: 0.6, metalness: 0.5 }));
+    roof.position.y = 15.2;
+    tank.add(roof);
+    place(world, tank, rx, rz, y);
+    world.addBuildingRecord({ group: tank, x: rx, y, z: rz, w: 36, d: 36, h: 16, top: 16, hp: 450, maxHp: 450, alive: true, crate: 'fuel', wallColor: 0x7a8288 });
+  }
+
+  // 2 факельные вышки с огнем
+  for (let i = 0; i < 2; i++) {
+    const fx = R.x + 130, fz = R.z - 60 + i * 120;
+    const flare = new THREE.Group();
+    const mast = new THREE.Mesh(G.cyl(0.8, 1.4, 32, 10), metal(0x8a9298));
+    mast.position.y = 16;
+    flare.add(mast);
+    place(world, flare, fx, fz, y);
+    world.chimneys.push({ x: fx, y: 33, z: fz });
+    world.addBuildingRecord({ group: flare, x: fx, y, z: fz, w: 4, d: 4, h: 32, top: 32, hp: 250, maxHp: 250, alive: true, crate: null, wallColor: 0x8a9298 });
+  }
+
+  // Склады и администрация
+  addBuilding(world, R.x - 20, R.z + 60, 36, 24, 12, 'warehouse', { facade: 'panel', tint: 0xc8c2b6, y });
+  addBuilding(world, R.x + 40, R.z - 70, 28, 20, 10, 'flat', { facade: 'panel', tint: 0xb5c0d0, y });
+
+  // Причал нефтеналивных барж в заливе
+  S.concrete.slab(R.x + 150, R.z - 30, R.x + 290, R.z + 30, 0, 0.4);
+  for (let k = 0; k < 6; k++) {
+    const bollard = new THREE.Mesh(G.cyl(0.3, 0.35, 1.2, 8), metal(0x222222));
+    place(world, bollard, R.x + 160 + k * 22, R.z + 32, 0.4);
+  }
+
+  // Танкер у причала
+  const tanker = new THREE.Group();
+  const hull = new THREE.Mesh(G.box(16, 8, 85), pbr(0x2b333e, { roughness: 0.6, metalness: 0.3 }));
+  hull.position.y = 3;
+  tanker.add(hull);
+  const deckHouse = new THREE.Mesh(G.box(14, 9, 16), pbr(0xf2f2f0, { roughness: 0.5 }));
+  deckHouse.position.set(0, 10, -30);
+  tanker.add(deckHouse);
+  place(world, tanker, R.x + 230, R.z + 55, WORLD.waterY + 1.2);
+  world.addBuildingRecord({ group: tanker, x: R.x + 230, y: 0, z: R.z + 55, w: 18, d: 85, h: 16, top: 16, hp: 900, maxHp: 900, alive: true, crate: 'fuel', wallColor: 0x2b333e });
+
+  const n = world.graph.add(R.x, y, R.z);
+  n.region = 'refinery';
+}
+
+// ---------- РЛС «Купол» ----------
+function buildRadarComplex(world) {
+  const R = LAYOUT.radar, S = world.surfaces;
+  const y = 36;
+  S.concrete.slab(R.x - R.hx + 10, R.z - R.hz + 10, R.x + R.hx - 10, R.z + R.hz - 10, y, 0.2);
+  
+  // 3 радиопрозрачных белых купола
+  for (let i = 0; i < 3; i++) {
+    const dx = -60 + i * 60, dz = (i % 2 === 0 ? -30 : 35);
+    const radome = new THREE.Group();
+    const base = new THREE.Mesh(G.cyl(14, 15, 8, 16), pbr(0xd6d8da, { roughness: 0.8 }));
+    base.position.y = 4;
+    radome.add(base);
+    const dome = new THREE.Mesh(G.sphere(13, 22, 16), pbr(0xf8f9fa, { roughness: 0.4 }));
+    dome.position.y = 11;
+    radome.add(dome);
+    place(world, radome, R.x + dx, R.z + dz, y);
+    world.addBuildingRecord({ group: radome, x: R.x + dx, y, z: R.z + dz, w: 28, d: 28, h: 24, top: 24, hp: 500, maxHp: 500, alive: true, crate: 'ammo', wallColor: 0xf8f9fa });
+  }
+
+  // 2 решётчатые металлические мачты связи высотой 38м
+  for (let i = 0; i < 2; i++) {
+    const mx = R.x - 90 + i * 180, mz = R.z;
+    const mast = new THREE.Group();
+    const pylon = new THREE.Mesh(G.cyl(0.7, 1.8, 38, 8), metal(0x9aa2a8));
+    pylon.position.y = 19;
+    mast.add(pylon);
+    const beacon = new THREE.Mesh(G.sphere(0.5, 6, 4), glow(0xff2222));
+    beacon.position.y = 38.5;
+    mast.add(beacon);
+    place(world, mast, mx, mz, y);
+    world.addBuildingRecord({ group: mast, x: mx, y, z: mz, w: 4, d: 4, h: 38, top: 38, hp: 250, maxHp: 250, alive: true, crate: null, wallColor: 0x9aa2a8 });
+  }
+
+  // Командный пункт
+  const bunker = addBuilding(world, R.x, R.z + 65, 32, 22, 10, 'flat', { facade: 'panel', tint: 0xb5bac0, y });
+  bunker.hp = 600;
+
+  // Ограда
+  for (let t = -R.hx + 10; t <= R.hx - 10; t += 6) {
+    world.sets.fence.add(R.x + t, y, R.z - R.hz + 10, Math.PI / 2);
+    world.sets.fence.add(R.x + t, y, R.z + R.hz - 10, Math.PI / 2);
+  }
+
+  const n = world.graph.add(R.x, y, R.z);
+  n.region = 'radar';
+}
+
+// ---------- Дамба Чёрного Ущелья ----------
+function buildDam(world) {
+  const D = LAYOUT.dam, S = world.surfaces;
+  const topY = 22, bottomY = 0;
+  
+  const damGroup = new THREE.Group();
+  const wall = new THREE.Mesh(G.box(140, topY, 24), pbr(0x8a9096, { roughness: 0.9 }));
+  wall.position.y = topY / 2;
+  damGroup.add(wall);
+
+  for (let i = -2; i <= 2; i++) {
+    const chute = new THREE.Mesh(G.box(12, 16, 26), pbr(0x5a6066, { roughness: 0.8, metalness: 0.4 }));
+    chute.position.set(i * 22, topY - 7, 0);
+    damGroup.add(chute);
+  }
+
+  S.asphalt.quad(D.x - 70, D.z - 7, D.x + 70, D.z + 7, topY + 0.1);
+  place(world, damGroup, D.x, D.z, bottomY);
+  world.addBuildingRecord({ group: damGroup, x: D.x, y: bottomY, z: D.z, w: 140, d: 24, h: topY, top: topY, hp: 2000, maxHp: 2000, alive: true, crate: null, wallColor: 0x8a9096, indestructible: true });
+
+  const powerhouse = addBuilding(world, D.x, D.z + 40, 48, 22, 14, 'flat', { facade: 'panel', tint: 0xc4c7cc, y: bottomY });
+  powerhouse.hp = 500;
+
+  for (let i = 0; i < 3; i++) {
+    const px = D.x - 90 + i * 90, pz = D.z + 90;
+    const pylon = new THREE.Group();
+    const mast = new THREE.Mesh(G.cyl(0.6, 2.2, 28, 4), metal(0x7a8288));
+    mast.position.y = 14;
+    pylon.add(mast);
+    const arm = new THREE.Mesh(G.box(18, 1.2, 1.2), metal(0x7a8288));
+    arm.position.y = 24;
+    pylon.add(arm);
+    place(world, pylon, px, pz, bottomY);
+  }
+
+  const n = world.graph.add(D.x, topY, D.z);
+  n.region = 'dam';
+}
+
+// ---------- Курорт «Золотые Пески» ----------
+function buildResort(world) {
+  const R = LAYOUT.resort, S = world.surfaces;
+  const y = 0;
+  S.asphalt.quad(R.x - R.hx + 20, R.z - R.hz + 20, R.x + R.hx - 20, R.z + R.hz - 20, 0.05);
+
+  const hotel = addBuilding(world, R.x, R.z - 40, 56, 32, 26, 'flat', { facade: 'glass', tint: 0xffffff, y, hp: 800 });
+  const pool = new THREE.Mesh(G.box(24, 0.6, 12), pbr(0x00b0ff, { roughness: 0.1, metalness: 0.2 }));
+  pool.position.set(0, hotel.h + 0.3, 0);
+  hotel.group.add(pool);
+
+  for (let i = 0; i < 6; i++) {
+    const vx = R.x - 70 + (i % 3) * 70, vz = R.z + 40 + Math.floor(i / 3) * 60;
+    addBuilding(world, vx, vz, 18, 14, 8, 'flat', { facade: 'plaster', tint: 0xfbfbfb, y, hp: 200 });
+    const vPool = new THREE.Mesh(G.box(10, 0.3, 6), pbr(0x00b4d8, { roughness: 0.1 }));
+    place(world, vPool, vx + 14, vz, y + 0.1);
+  }
+
+  for (let t = -R.hx + 30; t <= R.hx - 30; t += 22) {
+    world.sets.palms.add(R.x + t, y, R.z + 130, 0, 1.2);
+    world.sets.palms.add(R.x + t, y, R.z + 145, Math.PI / 2, 1.0);
+  }
+
+  S.concrete.slab(R.x - 40, R.z + 120, R.x + 40, R.z + 200, 0, 0.35);
+
+  const pad = createHelipad(9);
+  pad.group.position.set(R.x - 80, 0.06, R.z + 80);
+  world.scene.add(pad.group);
+
+  const n = world.graph.add(R.x, y, R.z);
+  n.region = 'resort';
+}
+
+// ---------- Бункер «Объект-42» ----------
+function buildBunker(world) {
+  const B = LAYOUT.bunker, S = world.surfaces;
+  const y = 78;
+  S.concrete.slab(B.x - 60, B.z - 50, B.x + 60, B.z + 50, y, 0.2);
+
+  const gateGroup = new THREE.Group();
+  const arch = new THREE.Mesh(G.box(28, 16, 12), pbr(0x444a50, { roughness: 0.9 }));
+  arch.position.y = 8;
+  gateGroup.add(arch);
+  const doors = new THREE.Mesh(G.box(18, 11, 4), metal(0x282c30));
+  doors.position.set(0, 5.5, 3);
+  gateGroup.add(doors);
+  place(world, gateGroup, B.x, B.z - 45, y);
+  world.addBuildingRecord({ group: gateGroup, x: B.x, y, z: B.z - 45, w: 28, d: 14, h: 16, top: 16, hp: 2000, maxHp: 2000, alive: true, crate: null, wallColor: 0x444a50, indestructible: true });
+
+  const pad = createHelipad(10);
+  pad.group.position.set(B.x, y + 0.06, B.z + 20);
+  world.scene.add(pad.group);
+  if (!world.padRings.includes(pad.ring)) world.padRings.push(pad.ring);
+
+  for (let i = 0; i < 2; i++) {
+    const vent = new THREE.Mesh(G.cyl(3, 3.5, 6, 8), metal(0x5a6068));
+    place(world, vent, B.x - 40 + i * 80, B.z - 10, y + 3);
+    world.addBuildingRecord({ group: vent, x: B.x - 40 + i * 80, y, z: B.z - 10, w: 7, d: 7, h: 6, top: 6, hp: 300, maxHp: 300, alive: true, crate: 'ammo', wallColor: 0x5a6068 });
+  }
+
+  const n = world.graph.add(B.x, y, B.z + 10);
+  n.region = 'bunker';
+}
+
 export function buildRegions(world) {
   buildFOB(world);
   buildIndustrial(world);
   buildAirbase(world);
+  buildRefinery(world);
+  buildRadarComplex(world);
+  buildDam(world);
+  buildResort(world);
+  buildBunker(world);
   buildVillages(world);
   buildOutposts(world);
   findPeaks(world);

@@ -8,6 +8,8 @@ import { World, LAYOUT } from './world.js';
 import { FX } from './fx.js';
 import { Projectiles } from './projectiles.js';
 import { Player, CAM_YAW } from './player.js';
+import { RemotePlayer } from './remote_player.js';
+import { NetworkManager } from './net.js';
 import { Pickup } from './pickups.js';
 import { Rescuee } from './enemies.js';
 import { MissionRunner, STORY } from './missions.js';
@@ -52,6 +54,10 @@ export class Game {
     this.camLook = new THREE.Vector3();
     this.fpsAcc = { t: 0, n: 0 };
     this.waypoint = null;
+    this.coopMode = false;
+    this.remotePlayer = null;
+    this.net = new NetworkManager(this);
+    this.setupNetworkEvents();
     this.setQuality(save.settings.quality, false);
     this.renderer.shadowMap.enabled = this.qualityLevel !== 'low';
     const onResize = () => {
@@ -313,6 +319,10 @@ export class Game {
 
   // ---------- игровые события ----------
   addEnemy(e) {
+    // Номер по порядку появления: мир строится одинаково у обоих
+    // игроков, и по номеру ведомый находит «того же» врага, даже когда
+    // списки чистятся от убитых в разное время.
+    e.nid = this.enemySeq = (this.enemySeq || 0) + 1;
     this.enemies.push(e);
     return e;
   }
@@ -479,6 +489,11 @@ export class Game {
     this.audio.play('rescue');
     this.hud.toast(p.kind === 'pilot' ? 'Пилот спасён!' : 'Человек спасён!', 'good', 1300);
     const b = this.player.atBase || this.world.base;
+    if (p.isPilotRescue) {
+      this.hud.toast('Пилот напарника спасён!', 'good', 3000);
+      this.addCredits(150, this.player.pos.clone(), 'big');
+      if (this.net?.isConnected) this.net.send({ type: 'revive' });
+    }
     const m = createPerson(p.kind);
     const y = this.world.heightAt(b.x, b.z);
     m.group.position.set(b.x + (Math.random() - 0.5) * 4, y, b.z + (Math.random() - 0.5) * 4);
@@ -501,6 +516,11 @@ export class Game {
 
   onPlayerDead() {
     this.timeScale = 1;
+    // в паре: напарник может подобрать нашего пилота лебёдкой
+    if (this.coopMode && this.net.isConnected) {
+      const p = this.player.pos;
+      this.net.send({ type: 'pilot_down', pos: [p.x, this.world.heightAt(p.x, p.z), p.z] });
+    }
     if (this.mission) this.missionDeaths++;
     for (const p of this.player.passengers) p.reset();
     this.player.passengers = [];
@@ -605,6 +625,22 @@ export class Game {
         if (this.cineT >= 3 && this.player.state !== 'dying') this.input.enabled = true;
       }
       this.player.update(dt, input);
+      if (this.remotePlayer) this.remotePlayer.update(dt);
+      if (this.coopMode && this.net.isConnected) {
+        if (this.net.isHost) {
+          this.net.snapshotTimer += dt;
+          if (this.net.snapshotTimer >= this.net.snapshotInterval) {
+            this.net.snapshotTimer = 0;
+            this.sendWorldSnapshot();
+          }
+        } else {
+          this.net.inputTimer += dt;
+          if (this.net.inputTimer >= this.net.inputInterval) {
+            this.net.inputTimer = 0;
+            this.sendClientState();
+          }
+        }
+      }
       for (const e of this.enemies) if (e.alive || e.dying) e.update(dt);
       for (const w of this.winchables) if (w.alive) w.update(dt);
       this.cleanT = (this.cleanT || 0) + dt;
@@ -675,6 +711,213 @@ export class Game {
       w.m.arms[0].rotation.x = Math.sin(w.t * 12) * 0.8;
       w.m.arms[1].rotation.x = -Math.sin(w.t * 12) * 0.8;
     }
+  }
+  // ==================== CO-OP & WI-FI MULTIPLAYER ====================
+  setupNetworkEvents() {
+    const net = this.net;
+    net.on('peer_hello', (msg) => {
+      if (!this.coopMode) return; // в лобби вертолёт напарника ещё не нужен
+      this.ensureRemote(msg.skin, msg.modules);
+      this.remotePlayer.setSkin(msg.skin || 'jungle', msg.modules || {});
+      this.hud.setWingman?.(this.remotePlayer);
+    });
+    net.on('remote_state', (msg) => {
+      if (this.coopMode && this.remotePlayer) this.remotePlayer.applyState(msg);
+    });
+    net.on('world_snapshot', (msg) => {
+      if (this.coopMode) this.applyWorldSnapshot(msg);
+    });
+    net.on('remote_fire', (msg) => {
+      if (this.coopMode) this.handleRemoteFire(msg);
+    });
+    net.on('remote_flare', (msg) => {
+      if (this.coopMode) this.handleRemoteFlare(msg);
+    });
+    net.on('remote_revive', () => {
+      if (!this.coopMode) return;
+      // пока пилота несли на базу, вертолёт мог уже прийти на замену
+      if (this.player.alive) {
+        this.hud.toast('Напарник спас вашего пилота!', 'good', 3000);
+        this.addCredits(50, this.player.pos.clone(), '');
+      } else {
+        this.player.respawn(this.world.base);
+        this.hud.toast('Напарник вернул вас в строй!', 'good', 3000);
+      }
+    });
+    net.on('remote_pilot_down', (msg) => {
+      if (!this.coopMode || !Array.isArray(msg.pos)) return;
+      this.spawnDownedPilot(new THREE.Vector3(msg.pos[0], msg.pos[1], msg.pos[2]), 'напарника');
+    });
+    net.on('link_lost', () => {
+      if (this.coopMode) this.hud.toast('Связь с напарником прервалась — восстанавливаем…', 'warn', 3000);
+    });
+    net.on('link_restored', () => {
+      if (this.coopMode) this.hud.toast('Напарник снова на связи', 'good', 2200);
+    });
+    net.on('peer_disconnected', () => {
+      if (!this.coopMode) return;
+      this.hud.toast('Напарник вышел из игры — летите дальше один', 'warn', 3500);
+      this.endCoop();
+    });
+  }
+
+  ensureRemote(skin, modules) {
+    if (this.remotePlayer) return this.remotePlayer;
+    const partnerRole = this.net.isHost ? 'client' : 'host';
+    this.remotePlayer = new RemotePlayer(this, partnerRole, skin || (partnerRole === 'host' ? 'marines' : 'jungle'), modules || {});
+    const base = this.world.base;
+    this.remotePlayer.pos.set(base.x + (this.net.isHost ? 8 : -8), this.world.heightAt(base.x, base.z) + 0.35, base.z);
+    this.remotePlayer.targetPos.copy(this.remotePlayer.pos);
+    return this.remotePlayer;
+  }
+
+  /** Вылет вдвоём: соединение уже установлено в лобби — здесь только игра. */
+  startCoop(role) {
+    this.startCampaign();
+    this.coopMode = true;
+    this.coopRole = role;
+    if (role === 'client') {
+      // ведомый встаёт рядом с ведущим, а не в тот же вертолёт
+      const p = this.player;
+      p.pos.x += 10;
+      p.baseY = this.world.heightAt(p.pos.x, p.pos.z);
+      p.pos.y = p.baseY + 0.35;
+    }
+    this.net.snapshotTimer = this.net.inputTimer = 0;
+    this.lastSnapSeq = 0;
+    const rs = this.net.remoteStats;
+    this.ensureRemote(rs.skin, rs.modules);
+    this.hud.setWingman?.(this.remotePlayer);
+    // напомним напарнику свой вертолёт — вдруг он сменил окраску в ангаре
+    this.net.sendHello();
+  }
+
+  /** Конец совместной игры: напарник вышел или мы вернулись в меню. */
+  endCoop() {
+    this.coopMode = false;
+    this.coopRole = null;
+    if (this.remotePlayer) {
+      this.remotePlayer.destroy();
+      this.remotePlayer = null;
+    }
+    this.hud.setWingman?.(null);
+    this.net.leave();
+  }
+
+  sendWorldSnapshot() {
+    if (!this.net.isConnected) return;
+    const p = this.player;
+    const enemiesData = [];
+    for (const e of this.enemies) {
+      if (e.alive && e.nid) {
+        enemiesData.push([e.nid, e.kind, Math.round(e.hp), Math.round(e.pos.x * 10) / 10, Math.round(e.pos.z * 10) / 10, e.yaw ? Math.round(e.yaw * 100) / 100 : 0]);
+      }
+    }
+    const snap = {
+      type: 'snapshot',
+      seq: ++this.net.seq,
+      p1: {
+        pos: [Math.round(p.pos.x * 10) / 10, Math.round(p.pos.y * 10) / 10, Math.round(p.pos.z * 10) / 10],
+        vel: [Math.round(p.vel.x * 10) / 10, Math.round(p.vel.y * 10) / 10, Math.round(p.vel.z * 10) / 10],
+        yaw: Math.round(p.yaw * 100) / 100,
+        tilt: [Math.round(p.tilt.x * 100) / 100, Math.round(p.tilt.z * 100) / 100],
+        armor: Math.round(p.armor),
+        fuel: Math.round(p.fuel),
+        alive: p.alive,
+        winch: p.winch ? { len: Math.round(p.winch.len * 10) / 10 } : null,
+      },
+      enemies: enemiesData,
+      maxNid: this.enemySeq || 0,
+    };
+    this.net.sendFast(snap);
+  }
+
+  sendClientState() {
+    if (!this.net.isConnected) return;
+    const p = this.player;
+    this.net.sendFast({
+      type: 'state',
+      pos: [Math.round(p.pos.x * 10) / 10, Math.round(p.pos.y * 10) / 10, Math.round(p.pos.z * 10) / 10],
+      vel: [Math.round(p.vel.x * 10) / 10, Math.round(p.vel.y * 10) / 10, Math.round(p.vel.z * 10) / 10],
+      yaw: Math.round(p.yaw * 100) / 100,
+      tilt: [Math.round(p.tilt.x * 100) / 100, Math.round(p.tilt.z * 100) / 100],
+      armor: Math.round(p.armor),
+      fuel: Math.round(p.fuel),
+      alive: p.alive,
+      winch: p.winch ? { len: Math.round(p.winch.len * 10) / 10 } : null,
+    });
+  }
+
+  applyWorldSnapshot(snap) {
+    // снимки идут по быстрому каналу без очерёдности — старые пропускаем
+    if (snap.seq <= (this.lastSnapSeq || 0) && snap.seq > (this.lastSnapSeq || 0) - 1000) return;
+    this.lastSnapSeq = snap.seq;
+    if (this.remotePlayer && snap.p1) this.remotePlayer.applyState(snap.p1);
+    if (!Array.isArray(snap.enemies)) return;
+    // Ведущий решает, кто из врагов жив: у ведомого враг с тем же номером
+    // и типом получает его здоровье и позицию, а убитый у ведущего гибнет.
+    const byId = new Map();
+    for (const e of this.enemies) if (e.nid) byId.set(e.nid, e);
+    const seen = new Set();
+    for (const [nid, kind, hp, x, z] of snap.enemies) {
+      const e = byId.get(nid);
+      if (!e || e.kind !== kind) continue;
+      seen.add(nid);
+      if (!e.alive) continue;
+      e.hp = hp;
+      if (e.kind === 'jeep' || e.kind === 'truck' || e.kind === 'soldier') {
+        e.pos.x = x;
+        e.pos.z = z;
+        if (e.obj) e.obj.position.set(x, e.pos.y, z);
+      }
+    }
+    for (const e of this.enemies) {
+      if (e.alive && e.nid && e.nid <= snap.maxNid && !seen.has(e.nid)) {
+        e.alive = false;
+        e.hp = 0;
+        e.die();
+      }
+    }
+  }
+
+  handleRemoteFire(msg) {
+    if (!this.remotePlayer) return;
+    const from = new THREE.Vector3(msg.from[0], msg.from[1], msg.from[2]);
+    const dir = new THREE.Vector3(msg.dir[0], msg.dir[1], msg.dir[2]);
+    if (msg.weapon === 'gun') {
+      this.projectiles.spawn('gun', 'player', from, dir, { mult: 1.0 });
+      this.fx.muzzle(from.x, from.y, from.z, 0.9);
+      this.audio.play('gun', from.x, from.z);
+    } else if (msg.weapon === 'hydra') {
+      this.projectiles.spawn('hydra', 'player', from, dir, { mult: 1.0 });
+      this.fx.puff(from.x, from.y, from.z, 1.4, true);
+      this.audio.play('rocket', from.x, from.z);
+    } else if (msg.weapon === 'hellfire') {
+      this.projectiles.spawn('hellfire', 'player', from, dir, { mult: 1.0 });
+      this.fx.puff(from.x, from.y, from.z, 2, true);
+      this.audio.play('hellfire', from.x, from.z);
+    }
+  }
+
+  handleRemoteFlare(msg) {
+    if (!this.remotePlayer) return;
+    const p = this.remotePlayer.pos;
+    for (let i = 0; i < 6; i++) {
+      const a = this.remotePlayer.yaw + Math.PI + (Math.random() - 0.5) * 2.4;
+      this.fx.flare(p.x, p.y - 1, p.z, Math.sin(a) * 10, Math.cos(a) * 10);
+    }
+    this.audio.play('flare', p.x, p.z);
+  }
+
+  spawnDownedPilot(pos, name = 'напарника') {
+    const pilot = new Rescuee(this, pos.x + 2, pos.z + 2, 'pilot');
+    pilot.label = `Сбитый ${name}`;
+    pilot.isPilotRescue = true;
+    pilot.radarColor = '#00e5ff';
+    this.winchables.push(pilot);
+    this.hud.toast(`🚨 ПИЛОТ СБИТ! Напарник может спасти его лебёдкой!`, 'warn', 4000);
+    this.audio.play('warn');
+    return pilot;
   }
 }
 

@@ -27,6 +27,11 @@
           <div class="bar" id="bar-armor"><span class="ico">🛡</span><div class="track"><div class="fill"></div></div></div>
           <div class="bar" id="bar-fuel"><span class="ico">⛽</span><div class="track"><div class="fill"></div></div></div>
           <div id="passengers"></div>
+          <div id="wingman-hud" class="wingman-hud hidden">
+            <div class="wm-title"><span>✈️ НАПАРНИК</span><span id="wm-ping">📶 0мс</span></div>
+            <div class="wm-bar"><div id="wm-armor-fill" class="fill"></div></div>
+            <div class="wm-dist" id="wm-dist">дист: 0м</div>
+          </div>
         </div>
         <div class="hud-center">
           <div id="objective"><span id="obj-text"></span><b id="obj-progress"></b></div>
@@ -122,6 +127,7 @@
         </div>
         <div class="menu-buttons">
           <button class="btn primary big" id="btn-play">В бой</button>
+          <button class="btn accent" id="btn-coop">👥 Совместно</button>
           <button class="btn" id="btn-missions">Сюжет</button>
           <button class="btn" id="btn-hangar">Ангар <span class="pill" id="menu-credits"></span></button>
           <button class="btn" id="btn-settings">Настройки</button>
@@ -130,6 +136,51 @@
       </div>
       <button class="btn primary hidden" id="btn-update">⟳ Доступна новая версия — обновить</button>
       <div class="version" id="version-menu"></div>
+    </section>
+
+    
+    <section id="coop" class="screen">
+      <div class="panel wide coop-panel">
+        <div class="panel-head">
+          <button class="back" data-back="menu" id="coop-back">←</button>
+          <h2>Совместная игра</h2>
+        </div>
+        <div class="coop-body">
+          <p class="coop-desc">
+            Летайте вдвоём на одном острове: прикрывайте друг друга, штурмуйте аванпосты и спасайте сбитого напарника лебёдкой.
+          </p>
+
+          <!-- Шаг 1: создать или присоединиться -->
+          <div id="coop-start" class="coop-roles">
+            <button type="button" class="coop-card host-card" id="btn-coop-host">
+              <span class="card-badge">ВЕДУЩИЙ</span>
+              <h3>Создать игру</h3>
+              <p>Получите код из 4 символов и отправьте его напарнику.</p>
+            </button>
+            <div class="coop-card client-card">
+              <span class="card-badge">ВЕДОМЫЙ</span>
+              <h3>Присоединиться</h3>
+              <input type="text" id="coop-code-input" class="coop-code-input" maxlength="4" placeholder="КОД"
+                     autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Код игры" />
+              <button type="button" class="btn accent" id="btn-coop-join">Подключиться</button>
+            </div>
+          </div>
+
+          <!-- Шаг 2 у ведущего: код и приглашение -->
+          <div id="coop-room" class="coop-room hidden">
+            <div class="coop-code-label">Код игры</div>
+            <div class="coop-code" id="coop-code">····</div>
+            <button type="button" class="btn" id="btn-coop-share">📤 Отправить приглашение</button>
+          </div>
+
+          <div class="coop-status-bar">
+            <div id="coop-status-badge" class="badge idle hidden"></div>
+            <button type="button" class="btn primary big hidden" id="btn-launch-coop">Взлёт вдвоём 🚁</button>
+            <button type="button" class="btn ghost hidden" id="btn-coop-cancel">Отменить</button>
+          </div>
+          <p class="coop-hint">Надёжнее всего — оба телефона в одной сети Wi-Fi. Нужен браузер Safari или Chrome.</p>
+        </div>
+      </div>
     </section>
 
     <section id="missions" class="screen">

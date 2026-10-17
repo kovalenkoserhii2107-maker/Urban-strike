@@ -239,7 +239,7 @@ export class World {
     });
     mat.uniforms.uNormal.value = T.waterNormal();
     mat.uniforms.uDepth.value = this.terrain.depthTexture();
-    const geo = new THREE.PlaneGeometry(4200, 4200, 80, 80).rotateX(-Math.PI / 2);
+    const geo = new THREE.PlaneGeometry(6000, 6000, 90, 90).rotateX(-Math.PI / 2);
     const water = new THREE.Mesh(geo, mat);
     water.position.y = WORLD.waterY;
     this.scene.add(water);

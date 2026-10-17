@@ -7,7 +7,7 @@ import { STORY } from './missions.js';
 import { missingRequirements, moduleLevel } from './modules.js';
 import { persist } from '../core/save.js';
 
-const FOG_N = 64;
+const FOG_N = 96;
 
 // Состояние открытого мира: аванпосты, фоновые враги, события, туман войны.
 export class OpenWorld {
@@ -84,13 +84,34 @@ export class OpenWorld {
     put('aa', 'airbase', 3);
     put('tank', 'airbase', 2, { patrol: true });
     put('sam', 'airbase', 2);
-    for (const v of LAYOUT.villages.slice(0, 2)) {
+
+    put('soldier', 'refinery', 8);
+    put('jeep', 'refinery', 2, { patrol: true });
+    put('aa', 'refinery', 2);
+    put('tank', 'refinery', 1, { patrol: true });
+
+    put('soldier', 'radar', 8);
+    put('sam', 'radar', 2);
+    put('aa', 'radar', 2);
+
+    put('soldier', 'dam', 6);
+    put('rpg', 'dam', 3);
+    put('aa', 'dam', 2);
+
+    put('soldier', 'resort', 6);
+    put('jeep', 'resort', 2, { patrol: true });
+
+    put('soldier', 'bunker', 10);
+    put('tank', 'bunker', 1);
+    put('sam', 'bunker', 2);
+
+    for (const v of LAYOUT.villages) {
       for (let i = 0; i < 3; i++) spawnEnemy(g, 'soldier', v.x + rng.float(-25, 25), v.z + rng.float(-25, 25));
     }
     for (const p of w.sites.mountains.slice(3)) spawnEnemy(g, 'aa', p.x + 6, p.z - 6);
     // припасы вдоль дорог и у аванпостов
-    for (let i = 0; i < 26; i++) {
-      const region = rng.pick(['city', 'city', 'industrial', 'airbase', null]);
+    for (let i = 0; i < 48; i++) {
+      const region = rng.pick(['city', 'industrial', 'airbase', 'refinery', 'radar', 'dam', 'resort', 'bunker', null]);
       let p;
       if (region) p = w.randomStreetPoint(rng, region, 40);
       else {
@@ -101,7 +122,7 @@ export class OpenWorld {
       g.addPickup(rng.pick(['fuel', 'fuel', 'ammo', 'armor']), p.x, p.z);
     }
     const blds = w.buildings.filter((b) => !b.indestructible);
-    for (let i = 0; i < 40 && blds.length; i++) blds.splice(rng.int(0, blds.length - 1), 1)[0].crate = rng.pick(['fuel', 'ammo', 'armor']);
+    for (let i = 0; i < 65 && blds.length; i++) blds.splice(rng.int(0, blds.length - 1), 1)[0].crate = rng.pick(['fuel', 'ammo', 'armor']);
   }
 
   // ---------- сюжет ----------
