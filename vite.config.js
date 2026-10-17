@@ -32,8 +32,13 @@ function swPrecache() {
   };
 }
 
+const pkg = JSON.parse(fs.readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
+const built = new Date().toISOString().slice(0, 16).replace('T', ' ');
+
 export default defineConfig({
   base: './',
+  // версия и время сборки видны на заставке, в меню и в настройках
+  define: { __APP_VERSION__: JSON.stringify(`${pkg.version} · ${built} UTC`) },
   plugins: [swPrecache()],
   build: { target: 'es2020', chunkSizeWarningLimit: 2000 },
 });

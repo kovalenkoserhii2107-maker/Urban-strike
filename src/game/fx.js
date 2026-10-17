@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { toon, glow, G } from './materials.js';
-import { islandSdf } from './world.js';
 
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
@@ -8,10 +7,43 @@ const _e = new THREE.Euler();
 const _p = new THREE.Vector3();
 const _s = new THREE.Vector3();
 const _c = new THREE.Color();
+const _qz = new THREE.Quaternion();
+const _zAxis = new THREE.Vector3(0, 0, 1);
 
-// Пул частиц на одном InstancedMesh: мультяшные шарики дыма/огня, обломки.
+// Мягкие спрайты дыма и огня: рисуются в canvas один раз.
+function spriteTexture(kind) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  if (kind === 'smoke') {
+    // несколько полупрозрачных клубов дают рваный край
+    for (let i = 0; i < 14; i++) {
+      const a = Math.random() * Math.PI * 2, r = Math.random() * 26;
+      const x = 64 + Math.cos(a) * r, y = 64 + Math.sin(a) * r, rad = 26 + Math.random() * 22;
+      const gr = g.createRadialGradient(x, y, 0, x, y, rad);
+      gr.addColorStop(0, 'rgba(255,255,255,0.32)');
+      gr.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = gr;
+      g.fillRect(0, 0, 128, 128);
+    }
+  } else {
+    const gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    gr.addColorStop(0, 'rgba(255,255,255,1)');
+    gr.addColorStop(0.25, 'rgba(255,255,255,0.75)');
+    gr.addColorStop(0.6, 'rgba(255,255,255,0.18)');
+    gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr;
+    g.fillRect(0, 0, 128, 128);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+// Пул частиц на одном InstancedMesh: спрайты дыма/огня или обломки.
 class Pool {
-  constructor(scene, geo, mat, max, { shadow = false, bounce = false } = {}) {
+  constructor(scene, geo, mat, max, { shadow = false, bounce = false, billboard = false } = {}) {
+    this.billboard = billboard;
     this.mesh = new THREE.InstancedMesh(geo, mat, max);
     this.mesh.frustumCulled = false;
     this.mesh.castShadow = shadow;
@@ -36,7 +68,7 @@ class Pool {
     this.list.push(p);
     return p;
   }
-  update(dt) {
+  update(dt, camQuat) {
     const list = this.list;
     let n = 0;
     for (let i = 0; i < list.length; i++) {
@@ -63,8 +95,12 @@ class Pool {
       const grow = 1 - Math.pow(1 - Math.min(k * (p.growRate || 3), 1), 2);
       let s = p.s0 + (p.s1 - p.s0) * grow;
       s *= 1 - smooth(p.fadeFrom ?? 0.6, 1, k);
-      _e.set(p.rx, p.ry, 0);
-      _q.setFromEuler(_e);
+      if (this.billboard && camQuat) {
+        _q.copy(camQuat).multiply(_qz.setFromAxisAngle(_zAxis, p.rx));
+      } else {
+        _e.set(p.rx, p.ry, 0);
+        _q.setFromEuler(_e);
+      }
       _m.compose(_p.set(p.x, p.y, p.z), _q, _s.set(s * p.sx, s * p.sy, s * p.sz));
       this.mesh.setMatrixAt(n, _m);
       if (p.c1) _c.copy(p.c0).lerp(p.c1, Math.min(1, k * (p.colorRate || 1.5)));
@@ -88,11 +124,17 @@ function smooth(a, b, x) {
 const rnd = (a, b) => a + Math.random() * (b - a);
 
 export class FX {
-  constructor(scene, quality = 1) {
+  constructor(scene, quality = 1, world = null) {
     this.scene = scene;
+    this.world = world;
     this.q = quality;
-    this.smoke = new Pool(scene, G.ico(1, 1), toon(0xffffff), Math.round(900 * quality), { shadow: true });
-    this.fire = new Pool(scene, G.ico(1, 1), glow(0xffffff), Math.round(600 * quality));
+    const plane = G.custom('fxPlane', () => new THREE.PlaneGeometry(2.2, 2.2));
+    const smokeMat = new THREE.MeshStandardMaterial({ map: spriteTexture('smoke'), transparent: true, depthWrite: false, roughness: 1, metalness: 0 });
+    const fireMat = new THREE.MeshBasicMaterial({ map: spriteTexture('fire'), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
+    this.smoke = new Pool(scene, plane, smokeMat, Math.round(900 * quality), { billboard: true });
+    this.fire = new Pool(scene, plane, fireMat, Math.round(600 * quality), { billboard: true });
+    this.fire.mesh.renderOrder = 3;
+    this.smoke.mesh.renderOrder = 2;
     this.debris = new Pool(scene, G.box(1, 1, 1), toon(0xffffff), Math.round(380 * quality), { shadow: true, bounce: true });
     this.emitters = [];
 
@@ -123,10 +165,12 @@ export class FX {
     this.colSmoke1 = new THREE.Color(0x9c9893);
     this.colWhite0 = new THREE.Color(0xf4f4f4);
     this.colWhite1 = new THREE.Color(0xbfc6cc);
+    this.colDust = new THREE.Color(0xb8a27c);
   }
 
   explosion(x, y, z, size = 1, debrisColor = 0x555555) {
-    const onWater = islandSdf(x, z) > 0 && y < 2;
+    const gy = this.ground(x, z);
+    const onWater = this.water(x, z) && y < gy + 2;
     this.fire.spawn({ x, y: y + 0.5, z, vx: 0, vy: 0, vz: 0, life: 0.28, s0: 0.5 * size, s1: 4.2 * size, c0: this.colFlash, growRate: 6, fadeFrom: 0.2 });
     const nf = Math.round(9 * size * this.q) + 3;
     for (let i = 0; i < nf; i++) {
@@ -150,14 +194,14 @@ export class FX {
       });
     }
     if (!onWater) this.debrisBurst(x, y + 0.5, z, Math.round(6 * size * this.q) + 2, debrisColor, size);
-    if (y < 4) {
-      this.ring(x, Math.max(y, 0) + 0.25, z, 7 * size);
+    if (y < gy + 4) {
+      this.ring(x, Math.max(y, gy) + 0.25, z, 7 * size);
       if (!onWater) this.addScorch(x, z, 2.6 * size);
     }
     if (onWater) {
       for (let i = 0; i < 10; i++)
         this.smoke.spawn({
-          x: x + rnd(-1, 1), y: 0, z: z + rnd(-1, 1), vx: rnd(-2, 2), vy: rnd(10, 18), vz: rnd(-2, 2), grav: 25,
+          x: x + rnd(-1, 1), y: gy, z: z + rnd(-1, 1), vx: rnd(-2, 2), vy: rnd(10, 18), vz: rnd(-2, 2), grav: 25,
           life: rnd(0.8, 1.1), s0: 0.7, s1: 1.4, c0: this.colWhite0, fadeFrom: 0.6,
         });
     }
@@ -171,7 +215,7 @@ export class FX {
       const s = rnd(0.25, 0.7) * Math.sqrt(size);
       const col = _c.clone().multiplyScalar(rnd(0.6, 1.1));
       this.debris.spawn({
-        x, y, z, vx: Math.cos(a) * sp, vy: rnd(6, 16), vz: Math.sin(a) * sp, grav: 30, drag: 0.4, floor: 0.2,
+        x, y, z, vx: Math.cos(a) * sp, vy: rnd(6, 16), vz: Math.sin(a) * sp, grav: 30, drag: 0.4, floor: this.ground(x, z) + 0.2,
         life: rnd(2.2, 3.6), s0: s, s1: s, sx: rnd(0.6, 1.6), sy: rnd(0.4, 1), sz: rnd(0.6, 1.6), spin: rnd(-10, 10), c0: col, fadeFrom: 0.85, growRate: 100,
       });
     }
@@ -200,7 +244,7 @@ export class FX {
 
   dust(x, z, n = 2) {
     for (let i = 0; i < n; i++)
-      this.smoke.spawn({ x: x + rnd(-1, 1), y: 0.4, z: z + rnd(-1, 1), vx: rnd(-3, 3), vy: rnd(1, 3), vz: rnd(-3, 3), drag: 2, life: rnd(0.5, 0.9), s0: 0.3, s1: 0.9, c0: new THREE.Color(0xc9b28a), fadeFrom: 0.4 });
+      this.smoke.spawn({ x: x + rnd(-1, 1), y: this.ground(x, z) + 0.4, z: z + rnd(-1, 1), vx: rnd(-3, 3), vy: rnd(1, 3), vz: rnd(-3, 3), drag: 2, life: rnd(0.5, 0.9), s0: 0.3, s1: 0.9, c0: this.water(x, z) ? this.colWhite0 : this.colDust, fadeFrom: 0.4 });
   }
 
   flare(x, y, z, vx, vz) {
@@ -219,16 +263,24 @@ export class FX {
     r.mesh.visible = true;
   }
 
+  ground(x, z) {
+    return this.world ? Math.max(this.world.heightAt(x, z), this.world.waterLevel) : 0;
+  }
+
+  water(x, z) {
+    return this.world ? this.world.isWater(x, z) : false;
+  }
+
   addScorch(x, z, size) {
     const i = this.scorchIdx++ % 140;
     _q.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, Math.random() * 6);
-    _m.compose(_p.set(x, 0.06 + i * 0.0004, z), _q, _s.set(size, 1, size * rnd(0.8, 1.1)));
+    _m.compose(_p.set(x, this.ground(x, z) + 0.12 + i * 0.0004, z), _q, _s.set(size, 1, size * rnd(0.8, 1.1)));
     this.scorch.setMatrixAt(i, _m);
     this.scorch.count = Math.min(this.scorchIdx, 140);
     this.scorch.instanceMatrix.needsUpdate = true;
   }
 
-  update(dt) {
+  update(dt, camera = null) {
     for (let i = this.emitters.length - 1; i >= 0; i--) {
       const e = this.emitters[i];
       e.t += dt;
@@ -251,8 +303,9 @@ export class FX {
           });
       }
     }
-    this.smoke.update(dt);
-    this.fire.update(dt);
+    const cq = camera ? camera.quaternion : null;
+    this.smoke.update(dt, cq);
+    this.fire.update(dt, cq);
     this.debris.update(dt);
     for (const r of this.rings) {
       if (r.t >= r.life) continue;

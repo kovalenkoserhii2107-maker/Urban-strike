@@ -35,10 +35,26 @@ export async function promptInstall() {
   return outcome;
 }
 
-export function registerSW() {
+// onUpdate вызывается, когда новая версия взяла управление страницей.
+export function registerSW(onUpdate) {
   if (!('serviceWorker' in navigator) || !import.meta.env.PROD) return;
+  const hadController = !!navigator.serviceWorker.controller;
+  let notified = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || notified) return;
+    notified = true;
+    onUpdate?.();
+  });
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
+    navigator.serviceWorker
+      .register('./sw.js')
+      .then((reg) => {
+        // проверяем обновления при каждом возвращении в приложение
+        document.addEventListener('visibilitychange', () => {
+          if (!document.hidden) reg.update().catch(() => {});
+        });
+      })
+      .catch(() => {});
   });
 }
 

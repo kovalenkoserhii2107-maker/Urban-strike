@@ -1,32 +1,40 @@
-import { Game, MISSIONS } from './game/game.js';
+import { Game, STORY } from './game/game.js';
 import { SKINS } from './game/viper.js';
-import { save, persist } from './core/save.js';
+import { MODULES, MODULE_ORDER, SKIN_UNLOCK, moduleLevel, nextLevel, canUpgrade, missingRequirements } from './game/modules.js';
+import { MapScreen } from './ui/map.js';
+import { save, persist, resetProgress } from './core/save.js';
 import { isStandalone, isIOS, canPrompt, promptInstall, onInstallChange, registerSW, goFullscreen } from './pwa.js';
 
-registerSW();
+const VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev';
+// Новая версия: на заставке перезагружаемся сразу, в меню и в игре — по кнопке.
+registerSW(() => {
+  if (!window.__stormhawkReady) location.reload();
+  else document.querySelector('#btn-update')?.classList.remove('hidden');
+});
 
 const $ = (s) => document.querySelector(s);
+const $$ = (s) => [...document.querySelectorAll(s)];
 // Встроенная версия (просмотр по ссылке): установка PWA там недоступна.
 const embedded = window.__STORMHAWK_EMBED__ === true;
 const session = {
-  get: (k) => {
+  get(k) {
     try {
-      return session.get(k);
+      return sessionStorage.getItem(k);
     } catch {
       return null;
     }
   },
-  set: (k, v) => {
+  set(k, v) {
     try {
-      session.set(k, v);
+      sessionStorage.setItem(k, v);
     } catch {
       /* хранилище недоступно */
     }
   },
 };
-const $$ = (s) => [...document.querySelectorAll(s)];
 let current = 'splash';
 let game;
+let mapScreen;
 
 // ---------- переходы между экранами ----------
 function show(id) {
@@ -41,6 +49,11 @@ function show(id) {
     }
   }
   current = id;
+}
+
+function hideScreens() {
+  for (const s of $$('.screen')) s.classList.remove('active');
+  current = 'game';
 }
 
 const wipe = $('#wipe');
@@ -84,144 +97,169 @@ function click() {
   game?.audio.play('ui');
 }
 
+function refreshCredits() {
+  for (const el of $$('.credits-val')) el.textContent = save.credits.toLocaleString('ru-RU');
+}
+
 // ---------- меню ----------
 function refreshMenu() {
-  $('#menu-credits').textContent = save.credits ? `💰 ${save.credits}` : '';
+  $('#menu-credits').textContent = save.credits ? `💰 ${save.credits.toLocaleString('ru-RU')}` : '';
   $('#btn-menu-install').classList.toggle('hidden', embedded || isStandalone() || (!canPrompt() && !isIOS()));
+  $('#btn-play').textContent = game?.ow ? 'Продолжить' : save.chapter > 0 || save.credits > 0 ? 'Продолжить' : 'В бой';
 }
 
 function goMenu() {
   setGameUI(false);
   refreshMenu();
   show('menu');
-  if (game.mode !== 'attract') game.startAttract();
+  if (game.mode !== 'attract') {
+    if (game.mode === 'play') game.pause(true);
+    game.audio.stopRotor();
+    game.menuReturn = true;
+    game.startAttract();
+  }
   if (save.settings.music) {
     game.audio.unlock();
     game.audio.startMusic('menu');
   }
 }
 
-function renderMissions() {
+// ---------- сюжет ----------
+function renderStory() {
+  refreshCredits();
   const list = $('#mission-list');
   list.innerHTML = '';
-  MISSIONS.forEach((m, i) => {
-    const locked = i + 1 > save.unlocked;
+  STORY.forEach((m, i) => {
+    const done = i < save.chapter;
+    const now = i === save.chapter;
+    const missing = missingRequirements(save, m.requires);
     const stars = save.stars[m.id] || 0;
-    const card = document.createElement('button');
-    card.className = 'card mission ' + m.lighting + (locked ? ' locked' : '');
+    const card = document.createElement('div');
+    card.className = 'card mission ' + m.lighting + (done ? ' done' : now ? ' current' : ' locked');
+    const reqs = Object.entries(m.requires)
+      .map(([id, lv]) => `<span class="req ${moduleLevel(save, id) >= lv ? 'ok' : 'miss'}">${MODULES[id].icon} ${MODULES[id].name} ${lv}</span>`)
+      .join('');
     card.innerHTML = `
       <div class="card-num">${i + 1}</div>
       <div class="card-body">
         <h3>${m.name}</h3>
         <div class="muted">${m.place}</div>
-        <div class="stars small">${[1, 2, 3].map((s) => `<span class="${s <= stars ? 'on' : ''}">★</span>`).join('')}</div>
-        ${save.best[m.id] ? `<div class="muted">Рекорд: ${save.best[m.id].toLocaleString('ru-RU')}</div>` : ''}
+        ${done ? `<div class="stars small">${[1, 2, 3].map((s) => `<span class="${s <= stars ? 'on' : ''}">★</span>`).join('')}</div>` : ''}
+        ${!done ? `<div class="reqs">${reqs || '<span class="req ok">Без требований</span>'}</div>` : ''}
+        ${now ? `<div class="hint-line">${missing.length ? 'Улучши модули в ангаре' : 'Лети к ★ на карте'}</div>` : ''}
       </div>
-      ${locked ? '<div class="lock">🔒</div>' : ''}`;
-    card.addEventListener('click', () => {
-      if (locked) {
-        card.classList.remove('shake');
-        void card.offsetWidth;
-        card.classList.add('shake');
-        return;
-      }
-      click();
-      openBriefing(i);
-    });
+      ${done ? '<div class="lock">✅</div>' : now ? '' : '<div class="lock">🔒</div>'}`;
     list.appendChild(card);
   });
 }
 
-let briefIndex = 0;
 let typer;
-function openBriefing(i) {
-  briefIndex = i;
-  const m = MISSIONS[i];
-  $('#brief-name').textContent = m.name;
-  $('#brief-place').textContent = m.place;
-  $('#brief-goals').innerHTML = m.goals.map((g) => `<li>${g}</li>`).join('');
+function offerMission(def, missing) {
+  game.pause(true);
+  $('#brief-name').textContent = def.name;
+  $('#brief-place').textContent = def.place;
+  $('#brief-goals').innerHTML = def.goals.map((g) => `<li>${g}</li>`).join('');
+  $('#brief-reward').textContent = `${def.reward.toLocaleString('ru-RU')} 💰 и новые модули`;
+  const req = $('#brief-req');
+  req.innerHTML = missing.length
+    ? `<div class="req-box">Нужны модули: ${missing.map((m) => `<b>${m.name}</b>`).join(', ')}.<br />Улучши их в ангаре на базе «Сокол».</div>`
+    : '';
+  $('#btn-launch').disabled = missing.length > 0;
   const el = $('#brief-story');
   el.textContent = '';
   clearInterval(typer);
   let k = 0;
   typer = setInterval(() => {
     k += 2;
-    el.textContent = m.briefing.slice(0, k);
-    if (k >= m.briefing.length) clearInterval(typer);
+    el.textContent = def.briefing.slice(0, k);
+    if (k >= def.briefing.length) clearInterval(typer);
   }, 16);
-  show('briefing');
+  offerDef = def;
+  show('offer');
 }
-
-async function launch(i) {
-  briefIndex = i;
-  click();
-  goFullscreen();
-  game.audio.stopMusic();
-  await transition(() => {
-    for (const s of $$('.screen')) s.classList.remove('active');
-    game.startMission(i);
-    setGameUI(true);
-    current = 'game';
-  });
-  banner(MISSIONS[i].name, MISSIONS[i].place);
-}
+let offerDef = null;
 
 // ---------- ангар ----------
-const UPGRADES = [
-  { key: 'armor', name: 'Броня', icon: '🛡', desc: '+30 к максимальной броне' },
-  { key: 'fuel', name: 'Топливный бак', icon: '⛽', desc: 'Расход топлива −23%' },
-  { key: 'gun', name: 'Пулемёт', icon: '🔫', desc: '+30% урона пулемёта' },
-  { key: 'rockets', name: 'Ракеты', icon: '🚀', desc: '+20% урона, +10 Hydra, +2 Hellfire' },
-];
-const COST = [400, 900, 1600];
+let hangarFrom = 'menu';
+let hangarTab = 'modules';
+
+function openHangar(from) {
+  hangarFrom = from;
+  if (from === 'game') game.pause(true);
+  renderHangar();
+  show('hangar');
+}
+
+function closeHangar() {
+  click();
+  if (hangarFrom === 'game') {
+    hideScreens();
+    game.pause(false);
+  } else {
+    refreshMenu();
+    show('menu');
+  }
+}
 
 function renderHangar() {
-  $('#hangar-credits').textContent = save.credits.toLocaleString('ru-RU');
-  const skins = $('#skin-list');
-  skins.innerHTML = '';
-  for (const [id, sk] of Object.entries(SKINS)) {
-    const b = document.createElement('button');
-    b.className = 'skin' + (save.skin === id ? ' on' : '');
-    const hex = (n) => '#' + n.toString(16).padStart(6, '0');
-    b.innerHTML = `<i style="background: linear-gradient(135deg, ${hex(sk.body)} 55%, ${hex(sk.dark)} 55%)"></i>${sk.name}`;
-    b.addEventListener('click', () => {
-      click();
-      save.skin = id;
-      persist();
-      renderHangar();
-      // в меню вертолёт сразу перекрашивается
-      if (game.mode === 'attract') game.startAttract();
-    });
-    skins.appendChild(b);
-  }
+  refreshCredits();
+  for (const t of $$('.tab')) t.classList.toggle('on', t.dataset.tab === hangarTab);
+  $('#upgrade-list').classList.toggle('hidden', hangarTab !== 'modules');
+  $('#skin-list').classList.toggle('hidden', hangarTab !== 'skins');
   const list = $('#upgrade-list');
   list.innerHTML = '';
-  for (const u of UPGRADES) {
-    const lvl = save.upgrades[u.key];
-    const cost = COST[lvl];
+  for (const id of MODULE_ORDER) {
+    const mod = MODULES[id];
+    const lv = moduleLevel(save, id);
+    const next = nextLevel(save, id);
+    const st = canUpgrade(save, id);
     const card = document.createElement('div');
-    card.className = 'card upgrade';
+    card.className = 'card upgrade' + (next && (save.chapter ?? 0) < next.chapter ? ' locked-next' : '');
     card.innerHTML = `
-      <div class="up-icon">${u.icon}</div>
+      <div class="up-icon">${mod.icon}</div>
       <div class="card-body">
-        <h3>${u.name}</h3>
-        <div class="muted">${u.desc}</div>
-        <div class="pips">${[0, 1, 2].map((i) => `<i class="${i < lvl ? 'on' : ''}"></i>`).join('')}</div>
+        <h3>${mod.name}</h3>
+        <div class="muted cur">${mod.levels[lv].name}</div>
+        <div class="pips">${mod.levels.map((_, i) => `<i class="${i <= lv ? 'on' : ''}"></i>`).join('')}</div>
+        ${next ? `<div class="next">→ ${next.name}</div>` : ''}
       </div>
-      <button class="btn small ${cost && save.credits >= cost ? 'primary' : ''}" ${!cost || save.credits < cost ? 'disabled' : ''}>
-        ${cost ? `💰 ${cost}` : 'MAX'}
-      </button>`;
+      <button class="btn small ${st.ok ? 'primary' : ''}" ${st.ok ? '' : 'disabled'}>
+        ${next ? (st.ok || st.reason === 'Не хватает кредитов' ? `💰 ${next.cost}` : '🔒') : 'MAX'}
+      </button>
+      ${next && !st.ok && st.reason !== 'Максимум' ? `<div class="lock-reason">${st.reason}</div>` : ''}`;
     card.querySelector('button').addEventListener('click', () => {
-      if (!cost || save.credits < cost) return;
-      save.credits -= cost;
-      save.upgrades[u.key]++;
+      if (!canUpgrade(save, id).ok) return;
+      save.credits -= next.cost;
+      save.modules[id] = lv + 1;
       persist();
       game.audio.unlock();
       game.audio.play('pickup');
+      if (game.ow) game.refitHeli();
+      else if (game.mode === 'attract') game.startAttract();
       renderHangar();
-      card.classList.add('bought');
     });
     list.appendChild(card);
+  }
+  const skins = $('#skin-list');
+  skins.innerHTML = '';
+  for (const [id, sk] of Object.entries(SKINS)) {
+    const need = SKIN_UNLOCK[id] ?? 0;
+    const open = (save.chapter ?? 0) >= need;
+    const b = document.createElement('button');
+    b.className = 'card skin-card' + (save.skin === id ? ' on' : '') + (open ? '' : ' locked');
+    const hex = (n) => '#' + n.toString(16).padStart(6, '0');
+    b.innerHTML = `<i style="background: linear-gradient(135deg, ${hex(sk.body)} 55%, ${hex(sk.dark)} 55%)"></i>
+      <div class="card-body"><h3>${sk.name}</h3><div class="muted">${open ? (save.skin === id ? 'Установлена' : 'Доступна') : `Откроется после главы ${need}`}</div></div>`;
+    b.addEventListener('click', () => {
+      if (!open) return;
+      click();
+      save.skin = id;
+      persist();
+      if (game.ow) game.refitHeli();
+      else if (game.mode === 'attract') game.startAttract();
+      renderHangar();
+    });
+    skins.appendChild(b);
   }
 }
 
@@ -234,15 +272,8 @@ function renderSettings() {
   $('#opt-vibration').checked = save.settings.vibration;
 }
 
-// ---------- результаты ----------
+// ---------- итоги сюжетного задания ----------
 function showResults(r) {
-  const m = MISSIONS[r.index];
-  const earned = Math.round(r.score / 10);
-  save.credits += earned;
-  save.stars[m.id] = Math.max(save.stars[m.id] || 0, r.stars);
-  save.best[m.id] = Math.max(save.best[m.id] || 0, r.score);
-  save.unlocked = Math.max(save.unlocked, Math.min(r.index + 2, MISSIONS.length));
-  persist();
   const mm = Math.floor(r.time / 60), ss = Math.floor(r.time % 60);
   const rows = [
     ['Время', `${mm}:${String(ss).padStart(2, '0')}`],
@@ -251,8 +282,6 @@ function showResults(r) {
     ['Разрушено зданий', r.buildings],
     ['Точность', r.accuracy + '%'],
     ['Мирные потери', r.civilians],
-    ['Бонус за жизни', '+' + r.bonus],
-    ['Счёт', r.score.toLocaleString('ru-RU')],
   ];
   $('#res-table').innerHTML = rows.map(([k, v], i) => `<div class="res-row" style="--d:${i * 90}ms"><span>${k}</span><b>${v}</b></div>`).join('');
   $$('#res-stars span').forEach((s, i) => {
@@ -264,53 +293,70 @@ function showResults(r) {
       }
     }, 600 + i * 380);
   });
+  const unlocked = MODULE_ORDER.flatMap((id) => MODULES[id].levels.filter((l) => l.chapter === save.chapter).map((l) => `${MODULES[id].icon} ${l.name}`));
+  const skin = Object.entries(SKIN_UNLOCK).find(([, ch]) => ch === save.chapter);
+  if (skin) unlocked.push(`🎨 Окраска «${SKINS[skin[0]].name}»`);
+  $('#res-unlock').innerHTML = unlocked.length ? `<b>Открыто в ангаре:</b><div class="chips">${unlocked.map((u) => `<span>${u}</span>`).join('')}</div>` : '';
   const credEl = $('#res-credits');
   let shown = 0;
-  const step = Math.max(1, Math.round(earned / 40));
+  const step = Math.max(1, Math.round(r.reward / 40));
   const iv = setInterval(() => {
-    shown = Math.min(earned, shown + step);
+    shown = Math.min(r.reward, shown + step);
     credEl.textContent = shown.toLocaleString('ru-RU');
-    if (shown >= earned) clearInterval(iv);
+    if (shown >= r.reward) clearInterval(iv);
   }, 30);
-  $('#btn-next').classList.toggle('hidden', r.index + 1 >= MISSIONS.length);
-  $('.win-title').textContent = r.index + 1 >= MISSIONS.length ? 'Кампания пройдена!' : 'Миссия выполнена!';
-  setGameUI(false);
+  $('.win-title').textContent = save.chapter >= STORY.length ? 'Кампания пройдена!' : 'Задание выполнено!';
   show('results');
-  if (save.settings.music) game.audio.startMusic('menu');
 }
 
 // ---------- запуск ----------
 async function boot() {
+  clearTimeout(window.__bootTimer);
+  for (const id of ['#version-splash', '#version-menu', '#version-settings']) $(id).textContent = 'Версия ' + VERSION;
+  try {
+    await bootInner();
+  } catch (err) {
+    window.__bootFail?.(err?.message || String(err));
+  }
+}
+
+async function bootInner() {
   const fill = $('.loader-fill');
   const text = $('.loader-text');
-  fill.style.width = '25%';
+  fill.style.width = '15%';
   await new Promise((r) => setTimeout(r, 60));
   try {
     game = new Game($('#game'), {
       banner,
       transition: (fn) => transition(fn),
       onPause: () => pauseGame(),
+      openMap: () => openMap(),
+      offerMission,
       onComplete: (r) => showResults(r),
-      onGameOver: () => {
-        setGameUI(false);
-        show('gameover');
-      },
     }, save);
   } catch (err) {
-    text.textContent = 'Не удалось запустить WebGL: ' + err.message;
-    return;
+    throw new Error('Не удалось запустить WebGL: ' + err.message);
   }
   window.__game = game;
   game.audio.setEnabled(save.settings.sound);
   game.audio.setMusic(save.settings.music);
-  fill.style.width = '60%';
-  text.textContent = 'Заправляем вертолёт…';
-  await new Promise((r) => setTimeout(r, 30));
+  fill.style.width = '35%';
+  text.textContent = 'Рельеф, леса и города острова…';
+  await new Promise((r) => setTimeout(r, 40));
   game.startAttract();
+  fill.style.width = '85%';
+  text.textContent = 'Прогрев шейдеров…';
+  await new Promise((r) => setTimeout(r, 40));
+  game.renderer.compile(game.scene, game.camera);
+  mapScreen = new MapScreen($('#map-screen'), game, () => {
+    hideScreens();
+    game.pause(false);
+  });
   fill.style.width = '100%';
   text.textContent = 'Готово!';
-  await new Promise((r) => setTimeout(r, 350));
+  await new Promise((r) => setTimeout(r, 300));
   const skip = session.get('install-skipped');
+  window.__stormhawkReady = true;
   await transition(() => {
     if (!isStandalone() && !skip && !embedded) openInstall();
     else goMenu();
@@ -330,6 +376,24 @@ function pauseGame() {
   game.pause(true);
   $('#opt-sound-p').checked = save.settings.sound;
   show('pause');
+}
+
+function openMap() {
+  if (game.mode !== 'play' && current !== 'pause') return;
+  game.pause(true);
+  show('map-screen');
+  requestAnimationFrame(() => mapScreen.open());
+}
+
+async function launch() {
+  click();
+  goFullscreen();
+  game.audio.stopMusic();
+  await transition(() => {
+    hideScreens();
+    setGameUI(true);
+    game.startCampaign();
+  });
 }
 
 // ---------- обработчики ----------
@@ -358,20 +422,31 @@ onInstallChange(() => {
   if (current === 'menu') refreshMenu();
 });
 
-$('#btn-play').addEventListener('click', () => {
-  click();
-  openBriefing(Math.min(save.unlocked, MISSIONS.length) - 1);
+$('#btn-play').addEventListener('click', () => launch());
+$('#btn-update').addEventListener('click', () => {
+  persist();
+  location.reload();
 });
 $('#btn-missions').addEventListener('click', () => {
   click();
-  renderMissions();
+  renderStory();
   show('missions');
 });
 $('#btn-hangar').addEventListener('click', () => {
   click();
-  renderHangar();
-  show('hangar');
+  openHangar('menu');
 });
+$('#btn-hangar-hud').addEventListener('click', () => {
+  click();
+  openHangar('game');
+});
+$('#hangar-back').addEventListener('click', closeHangar);
+for (const t of $$('.tab'))
+  t.addEventListener('click', () => {
+    click();
+    hangarTab = t.dataset.tab;
+    renderHangar();
+  });
 $('#btn-settings').addEventListener('click', () => {
   click();
   renderSettings();
@@ -380,12 +455,22 @@ $('#btn-settings').addEventListener('click', () => {
 for (const b of $$('[data-back]'))
   b.addEventListener('click', () => {
     click();
-    const to = b.dataset.back;
-    if (to === 'missions') renderMissions();
-    if (to === 'menu') refreshMenu();
-    show(to);
+    refreshMenu();
+    show(b.dataset.back);
   });
-$('#btn-launch').addEventListener('click', () => launch(briefIndex));
+
+$('#btn-launch').addEventListener('click', () => {
+  if (!offerDef || missingRequirements(save, offerDef.requires).length) return;
+  click();
+  hideScreens();
+  game.pause(false);
+  game.startStory(offerDef);
+});
+$('#btn-later').addEventListener('click', () => {
+  click();
+  hideScreens();
+  game.pause(false);
+});
 
 for (const b of $$('#quality-seg button'))
   b.addEventListener('click', () => {
@@ -402,16 +487,13 @@ for (const b of $$('#camera-seg button'))
     persist();
     renderSettings();
   });
-$('#opt-sound').addEventListener('change', (e) => {
+const setSound = (e) => {
   save.settings.sound = e.target.checked;
   persist();
   game.audio.setEnabled(e.target.checked);
-});
-$('#opt-sound-p').addEventListener('change', (e) => {
-  save.settings.sound = e.target.checked;
-  persist();
-  game.audio.setEnabled(e.target.checked);
-});
+};
+$('#opt-sound').addEventListener('change', setSound);
+$('#opt-sound-p').addEventListener('change', setSound);
 $('#opt-music').addEventListener('change', (e) => {
   save.settings.music = e.target.checked;
   persist();
@@ -437,65 +519,49 @@ $('#btn-reset').addEventListener('click', (e) => {
     }, 3000);
     return;
   }
-  resetArmed = false;
-  e.target.textContent = 'Сбросить прогресс';
-  Object.assign(save, { unlocked: 1, stars: {}, best: {}, credits: 0, upgrades: { armor: 0, fuel: 0, gun: 0, rockets: 0 } });
-  persist();
-  refreshMenu();
-  show('menu');
+  resetProgress();
+  location.reload();
 });
 
 $('#btn-pause').addEventListener('click', () => {
   click();
   pauseGame();
 });
+$('#btn-map').addEventListener('click', () => {
+  click();
+  openMap();
+});
+$('#btn-pause-map').addEventListener('click', () => {
+  click();
+  show('map-screen');
+  requestAnimationFrame(() => mapScreen.open());
+});
 $('#btn-resume').addEventListener('click', () => {
   click();
-  for (const s of $$('.screen')) s.classList.remove('active');
-  current = 'game';
+  hideScreens();
   game.pause(false);
-});
-$('#btn-restart').addEventListener('click', () => {
-  for (const s of $$('.screen')) s.classList.remove('active');
-  launch(game.missionIndex);
 });
 $('#btn-quit').addEventListener('click', () => {
   click();
-  game.audio.stopRotor();
+  persist();
   transition(() => goMenu());
 });
 $('#btn-next').addEventListener('click', () => {
   click();
-  openBriefing(Math.min(briefIndex + 1, MISSIONS.length - 1));
+  hideScreens();
+  game.resumeAfterStory();
 });
 $('#btn-res-hangar').addEventListener('click', () => {
   click();
-  transition(() => {
-    goMenu();
-    renderHangar();
-    show('hangar');
-  });
-});
-$('#btn-res-menu').addEventListener('click', () => {
-  click();
-  transition(() => goMenu());
-});
-$('#btn-retry').addEventListener('click', () => launch(game.missionIndex));
-$('#btn-go-hangar').addEventListener('click', () => {
-  click();
-  transition(() => {
-    goMenu();
-    renderHangar();
-    show('hangar');
-  });
-});
-$('#btn-go-menu').addEventListener('click', () => {
-  click();
-  transition(() => goMenu());
+  game.resumeAfterStory();
+  openHangar('game');
 });
 
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && game?.mode === 'play') pauseGame();
+  if (document.hidden) {
+    persist();
+    if (game?.mode === 'play') pauseGame();
+  }
 });
 // блокируем двойной тап-зум и жесты iOS
 document.addEventListener('gesturestart', (e) => e.preventDefault());

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import * as M from './models.js';
 import { toon, G } from './materials.js';
+import { createJet } from './regions.js';
 import { turnTowards, wrapAngle, dist2D } from '../core/utils.js';
 
 const _v = new THREE.Vector3();
@@ -13,7 +14,7 @@ export class Enemy {
   constructor(game, kind, x, z, cfg) {
     this.game = game;
     this.kind = kind;
-    this.pos = new THREE.Vector3(x, cfg.y ?? 0, z);
+    this.pos = new THREE.Vector3(x, game.world.heightAt(x, z) + (cfg.y ?? 0), z);
     this.hp = this.maxHp = cfg.hp;
     this.radius = cfg.radius;
     this.centerY = cfg.centerY;
@@ -68,7 +69,10 @@ export class Enemy {
       }
     });
     this.obj.rotation.z = rnd(-0.12, 0.12);
-    this.obj.position.y = -0.3;
+    this.obj.position.y = this.pos.y - 0.3;
+  }
+  ground() {
+    return this.game.world.heightAt(this.pos.x, this.pos.z);
   }
   player() {
     const p = this.game.player;
@@ -102,29 +106,29 @@ export class Enemy {
 }
 
 // Движение по дорожной сетке (джипы, конвой, танки, босс).
-class RoadMover {
+export class RoadMover {
   constructor(world, x, z, speed) {
-    this.world = world;
-    this.from = world.nearestNode(x, z);
-    const nb = world.neighbors(...this.from);
-    this.to = nb[Math.floor(Math.random() * nb.length)];
+    this.graph = world.graph;
+    this.from = this.graph.nearest(x, z, (n) => n.nbrs.length > 0);
+    this.to = this.from.nbrs[Math.floor(Math.random() * this.from.nbrs.length)];
     this.t = 0;
     this.speed = speed;
   }
   step(dt, pos, lane = 0) {
-    const w = this.world;
-    const a = w.nodePos(...this.from), b = w.nodePos(...this.to);
-    this.t += (this.speed * dt) / 60;
+    const len = Math.hypot(this.to.x - this.from.x, this.to.z - this.from.z) || 1;
+    this.t += (this.speed * dt) / len;
     if (this.t >= 1) {
       this.t -= 1;
-      const opts = w.neighbors(...this.to).filter((n) => n[0] !== this.from[0] || n[1] !== this.from[1]);
+      const nx = this.graph.next(this.from, this.to);
       this.from = this.to;
-      this.to = opts[Math.floor(Math.random() * opts.length)];
+      this.to = nx;
     }
-    const p = w.nodePos(...this.from), q = w.nodePos(...this.to);
-    const fx = Math.sign(q.x - p.x), fz = Math.sign(q.z - p.z);
+    const p = this.from, q = this.to;
+    const l = Math.hypot(q.x - p.x, q.z - p.z) || 1;
+    const fx = (q.x - p.x) / l, fz = (q.z - p.z) / l;
     pos.x = p.x + (q.x - p.x) * this.t + fz * lane;
     pos.z = p.z + (q.z - p.z) * this.t - fx * lane;
+    pos.y = p.y + (q.y - p.y) * this.t + 0.1;
     return Math.atan2(fx, fz);
   }
 }
@@ -170,6 +174,7 @@ export class Soldier extends Enemy {
         this.yaw = turnTowards(this.yaw, Math.atan2(this.goal.x - this.pos.x, this.goal.z - this.pos.z), dt * 5);
         this.pos.x += Math.sin(this.yaw) * 2.6 * dt;
         this.pos.z += Math.cos(this.yaw) * 2.6 * dt;
+        this.pos.y = this.ground();
         this.walk += dt * 9;
       }
     }
@@ -190,7 +195,7 @@ export class Rescuee {
   constructor(game, x, z, kind = 'hostage') {
     this.game = game;
     this.kind = kind;
-    this.pos = new THREE.Vector3(x, 0, z);
+    this.pos = new THREE.Vector3(x, game.world.heightAt(x, z), z);
     this.home = this.pos.clone();
     this.model = M.createPerson(kind);
     this.obj = this.model.group;
@@ -219,7 +224,7 @@ export class Rescuee {
     this.model.arms[1].rotation.x = -2.6 - Math.sin(this.t * wave) * 0.5;
     this.model.arms[0].rotation.z = -0.3;
     this.model.arms[1].rotation.z = 0.3;
-    this.obj.position.y = near ? Math.abs(Math.sin(this.t * 8)) * 0.6 : 0;
+    this.obj.position.y = this.pos.y + (near ? Math.abs(Math.sin(this.t * 8)) * 0.6 : 0);
     if (near) this.obj.rotation.y = Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z);
   }
   reset() {
@@ -450,7 +455,7 @@ export class EnemyHeli extends Enemy {
   constructor(game, x, z) {
     super(game, 'heli', x, z, { hp: 110, radius: 3.6, centerY: 0, score: 900, y: 18, label: 'Вертолёт противника' });
     this.model = M.createHeli('enemy');
-    this.home = new THREE.Vector3(x, 18, z);
+    this.home = new THREE.Vector3(x, this.pos.y, z);
     this.vel = new THREE.Vector3();
     this.orbit = rnd(0, 6);
     this.attach(this.model.group);
@@ -465,10 +470,10 @@ export class EnemyHeli extends Enemy {
     let goal;
     if (p) {
       this.orbit += dt * 0.5;
-      goal = _v.set(p.pos.x + Math.cos(this.orbit) * 34, 18, p.pos.z + Math.sin(this.orbit) * 34);
+      goal = _v.set(p.pos.x + Math.cos(this.orbit) * 34, 0, p.pos.z + Math.sin(this.orbit) * 34);
     } else {
       this.orbit += dt * 0.25;
-      goal = _v.set(this.home.x + Math.cos(this.orbit) * 40, 18, this.home.z + Math.sin(this.orbit) * 40);
+      goal = _v.set(this.home.x + Math.cos(this.orbit) * 40, 0, this.home.z + Math.sin(this.orbit) * 40);
     }
     _d.copy(goal).sub(this.pos);
     _d.y = 0;
@@ -476,6 +481,9 @@ export class EnemyHeli extends Enemy {
     _d.normalize().multiplyScalar(acc * dt);
     this.vel.add(_d).multiplyScalar(Math.exp(-1.2 * dt));
     this.pos.add(this.vel.clone().multiplyScalar(dt));
+    // держим высоту над рельефом и крышами
+    const alt = this.game.world.clearance(this.pos.x, this.pos.z, 6) + 17;
+    this.pos.y += (alt - this.pos.y) * Math.min(1, dt * 1.5);
     const face = p ? Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z) : Math.atan2(this.vel.x, this.vel.z);
     this.yaw = turnTowards(this.yaw, face, dt * 2.2);
     if (p) {
@@ -517,12 +525,13 @@ export class EnemyHeli extends Enemy {
     this.obj.rotation.y += this.spin * dt;
     this.model.rotor.rotation.y += dt * 20;
     if (Math.random() < 0.6) this.game.fx.puff(this.pos.x, this.pos.y, this.pos.z, 2.2);
-    if (this.pos.y <= 0.5) {
+    const gy = Math.max(this.ground(), this.game.world.waterLevel);
+    if (this.pos.y <= gy + 0.5) {
       this.dying = false;
-      this.pos.y = 0;
-      this.obj.position.y = 0;
-      this.game.fx.explosion(this.pos.x, 1, this.pos.z, 2);
-      this.game.fx.addFire(this.pos.x, 1, this.pos.z, 10, 1.2);
+      this.pos.y = gy;
+      this.obj.position.y = gy;
+      this.game.fx.explosion(this.pos.x, gy + 1, this.pos.z, 2);
+      this.game.fx.addFire(this.pos.x, gy + 1, this.pos.z, 10, 1.2);
       this.game.audio.play('boomBig', this.pos.x, this.pos.z);
       this.game.world.blast(this.pos.x, this.pos.z, 6);
       this.game.shakeAt(this.pos.x, this.pos.z, 1);
@@ -705,6 +714,18 @@ export class Fortress extends Enemy {
   }
 }
 
+// Истребитель на стоянке авиабазы: неподвижная, но ценная цель.
+export class ParkedJet extends Enemy {
+  constructor(game, x, z, rot = 0) {
+    super(game, 'jet', x, z, { hp: 50, radius: 4.5, centerY: 1.8, score: 450, label: 'Истребитель' });
+    this.yaw = rot;
+    this.attach(createJet());
+  }
+  update(dt) {
+    this.baseUpdate(dt);
+  }
+}
+
 export function spawnEnemy(game, type, x, z, opts = {}) {
   let e;
   switch (type) {
@@ -719,6 +740,7 @@ export function spawnEnemy(game, type, x, z, opts = {}) {
     case 'bunker': e = new Bunker(game, x, z); break;
     case 'generator': e = new Generator(game, x, z); break;
     case 'heli': e = new EnemyHeli(game, x, z); break;
+    case 'jet': e = new ParkedJet(game, x, z, opts.rot || 0); break;
     case 'boss': {
       e = new Fortress(game, x, z);
       game.addEnemy(e);

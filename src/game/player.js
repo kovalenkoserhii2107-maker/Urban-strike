@@ -2,26 +2,20 @@ import * as THREE from 'three';
 import { createViper } from './viper.js';
 import { toon, glow, G } from './materials.js';
 import { clamp, damp, turnTowards, wrapAngle, dist2D } from '../core/utils.js';
-import { MAP } from './world.js';
+import { WORLD } from './terrain.js';
+import { heliStats } from './modules.js';
 
 export const CAM_YAW = Math.PI / 4;
-const CRUISE = 16;
+const AGL = 15; // высота полёта над препятствиями
 const _v = new THREE.Vector3();
 const _d = new THREE.Vector3();
 const rnd = (a, b) => a + Math.random() * (b - a);
 
 export class Player {
-  constructor(game, upgrades) {
+  constructor(game) {
     this.game = game;
-    const u = upgrades;
-    this.maxArmor = 100 + u.armor * 30;
-    this.fuelDrain = 0.55 / (1 + u.fuel * 0.3);
-    this.gunMult = 1 + u.gun * 0.3;
-    this.rocketMult = 1 + u.rockets * 0.2;
-    this.maxAmmo = { gun: 1200, hydra: 38 + u.rockets * 10, hellfire: 8 + u.rockets * 2 };
-    this.capacity = 6;
-
-    const m = createViper(game.save.skin);
+    this.applyModules();
+    const m = createViper(game.save.skin, game.save.modules);
     this.model = m;
     this.obj = m.group;
     game.scene.add(this.obj);
@@ -40,23 +34,41 @@ export class Player {
     this.targetRing.renderOrder = 10;
     game.scene.add(this.targetRing);
 
-    if (game.world.night) {
-      this.spot = new THREE.SpotLight(0xfff2c8, 900, 90, 0.42, 0.55, 1.6);
-      this.spot.castShadow = false;
-      game.scene.add(this.spot, this.spot.target);
-    }
+    // прожектор включается ночью
+    this.spot = new THREE.SpotLight(0xfff2c8, 900, 110, 0.42, 0.55, 1.6);
+    this.spot.castShadow = false;
+    game.scene.add(this.spot, this.spot.target);
     this.respawn();
   }
 
-  respawn() {
-    const b = this.game.world.base;
-    this.pos.set(b.x, 0.35, b.z);
+  // Характеристики из установленных модулей (см. modules.js).
+  applyModules() {
+    const s = heliStats(this.game.save);
+    this.stats = s;
+    this.maxArmor = s.armor;
+    this.fuelDrain = 0.5 * s.drain;
+    this.gunMult = s.gunDmg;
+    this.gunRate = s.gunRate;
+    this.rocketMult = s.rocketDmg;
+    this.hfMult = s.hfDmg;
+    this.maxAmmo = { gun: 1200, hydra: s.hydra, hellfire: s.hellfire };
+    this.capacity = s.seats;
+    this.winchSpeed = s.winch;
+    this.maxFlares = s.flares;
+    this.flareRecharge = s.recharge;
+    this.speedMult = s.speed;
+    this.aimRange = s.aim;
+  }
+
+  respawn(base = this.game.world.base) {
+    this.baseY = this.game.world.heightAt(base.x, base.z);
+    this.pos.set(base.x, this.baseY + 0.35, base.z);
     this.vel.set(0, 0, 0);
     this.yaw = Math.atan2(-Math.sin(CAM_YAW), -Math.cos(CAM_YAW));
     this.armor = this.maxArmor;
     this.fuel = 100;
     this.ammo = { ...this.maxAmmo };
-    this.flares = 6;
+    this.flares = this.maxFlares;
     this.flareCharge = 0;
     this.passengers = [];
     this.alive = true;
@@ -103,7 +115,8 @@ export class Player {
     if (this.state === 'intro') {
       this.introT += dt;
       const k = clamp(this.introT / 2.4, 0, 1);
-      this.pos.y = 0.35 + (CRUISE - 0.35) * (1 - Math.pow(1 - k, 3));
+      const top = Math.max(this.game.world.clearance(this.pos.x, this.pos.z, 6), this.baseY) + AGL;
+      this.pos.y = this.baseY + 0.35 + (top - this.baseY - 0.35) * (1 - Math.pow(1 - k, 3));
       if (Math.random() < 0.7) g.fx.dust(this.pos.x + rnd(-6, 6), this.pos.z + rnd(-6, 6), 1);
       if (k >= 1) this.state = 'fly';
       this.applyTransform(dt, 0, 0);
@@ -114,7 +127,7 @@ export class Player {
     const mv = input.move;
     const mag = Math.min(1, Math.hypot(mv.x, mv.y));
     const dir = this.worldMove(mv.x, mv.y);
-    const ACC = 46;
+    const ACC = 46 * this.speedMult;
     this.vel.x += dir.x * ACC * dt;
     this.vel.z += dir.z * ACC * dt;
     const drag = Math.exp(-1.7 * dt);
@@ -122,7 +135,7 @@ export class Player {
     this.vel.z *= drag;
     this.pos.x += this.vel.x * dt;
     this.pos.z += this.vel.z * dt;
-    const lim = MAP.L + 40;
+    const lim = WORLD.half - 60;
     if (Math.abs(this.pos.x) > lim) {
       this.pos.x = Math.sign(this.pos.x) * lim;
       this.vel.x *= -0.3;
@@ -131,9 +144,12 @@ export class Player {
       this.pos.z = Math.sign(this.pos.z) * lim;
       this.vel.z *= -0.3;
     }
-    const clearance = g.world.clearance(this.pos.x, this.pos.z, 4);
-    const targetAlt = Math.max(CRUISE, clearance + 6);
-    this.pos.y = damp(this.pos.y, targetAlt, targetAlt > this.pos.y ? 4 : 1.5, dt);
+    // следуем рельефу с упреждением, чтобы заранее набирать высоту перед склоном
+    const w = g.world;
+    const ahead = Math.max(w.clearance(this.pos.x, this.pos.z, 5), w.clearance(this.pos.x + this.vel.x * 0.9, this.pos.z + this.vel.z * 0.9, 5), w.waterLevel);
+    const targetAlt = ahead + AGL;
+    this.pos.y = damp(this.pos.y, targetAlt, targetAlt > this.pos.y ? 4 : 1.2, dt);
+    this.updateJamming(dt);
 
     // --- цель и стрельба ---
     this.targetT -= dt;
@@ -158,7 +174,7 @@ export class Player {
     if (input.flarePressed) this.deployFlares();
 
     this.flareCharge += dt;
-    if (this.flares < 6 && this.flareCharge > 9) {
+    if (this.flares < this.maxFlares && this.flareCharge > this.flareRecharge) {
       this.flareCharge = 0;
       this.flares++;
     }
@@ -188,7 +204,7 @@ export class Player {
     this.updateWeaponsVisual(dt);
 
     // рябь от винта над водой/землёй
-    if (this.pos.y < 20 && Math.random() < 0.3) {
+    if (this.pos.y - g.world.heightAt(this.pos.x, this.pos.z) < 20 && Math.random() < 0.3) {
       const a = Math.random() * Math.PI * 2;
       g.fx.dust(this.pos.x + Math.cos(a) * 5, this.pos.z + Math.sin(a) * 5, 1);
     }
@@ -237,9 +253,11 @@ export class Player {
       tr.scale.setScalar(s);
       tr.rotation.y += dt * 2;
     } else tr.visible = false;
-    if (this.spot) {
+    this.spot.visible = this.game.world.night && this.state !== 'dead';
+    if (this.spot.visible) {
       this.spot.position.set(this.pos.x, this.pos.y + 2, this.pos.z);
-      this.spot.target.position.set(this.pos.x + Math.sin(this.yaw) * 22, 0, this.pos.z + Math.cos(this.yaw) * 22);
+      const tx = this.pos.x + Math.sin(this.yaw) * 22, tz = this.pos.z + Math.cos(this.yaw) * 22;
+      this.spot.target.position.set(tx, this.game.world.heightAt(tx, tz), tz);
     }
   }
 
@@ -250,7 +268,7 @@ export class Player {
       if (!e.alive || !e.targetable) continue;
       const dx = e.pos.x - this.pos.x, dz = e.pos.z - this.pos.z;
       const d = Math.hypot(dx, dz);
-      if (d > 85) continue;
+      if (d > this.aimRange) continue;
       const cos = (dx * fx + dz * fz) / (d || 1);
       const ang = Math.acos(clamp(cos, -1, 1));
       if (ang > 1.3 && d > 30) continue;
@@ -271,7 +289,8 @@ export class Player {
       if (tvel) _v.addScaledVector(tvel, from.distanceTo(tp) / speed);
       _v.sub(from);
     } else {
-      _v.set(Math.sin(this.yaw) * 34, -this.pos.y, Math.cos(this.yaw) * 34);
+      const gx = this.pos.x + Math.sin(this.yaw) * 34, gz = this.pos.z + Math.cos(this.yaw) * 34;
+      _v.set(Math.sin(this.yaw) * 34, this.game.world.heightAt(gx, gz) - this.pos.y, Math.cos(this.yaw) * 34);
     }
     _v.normalize();
     if (spread) {
@@ -285,7 +304,7 @@ export class Player {
   fireGun() {
     if (this.cool.gun > 0) return;
     if (this.ammo.gun <= 0) return this.dry();
-    this.cool.gun = 1 / 12;
+    this.cool.gun = 1 / this.gunRate;
     this.gunSpin = 0.2;
     this.ammo.gun--;
     const g = this.game;
@@ -321,7 +340,16 @@ export class Player {
     const shown = Math.ceil(((this.ammo.hellfire + 1) / this.maxAmmo.hellfire) * rack.length);
     const from = rack[clamp(shown - 1, 0, rack.length - 1)].getWorldPosition(new THREE.Vector3());
     const dir = new THREE.Vector3(Math.sin(this.yaw), -0.25, Math.cos(this.yaw));
-    g.projectiles.spawn('hellfire', 'player', from, dir, { mult: this.rocketMult, target: this.target });
+    g.projectiles.spawn('hellfire', 'player', from, dir, { mult: this.hfMult, target: this.target });
+    // JAGM: вторая ракета уходит по другой цели
+    if (this.stats.salvo && this.ammo.hellfire > 0) {
+      const second = this.game.enemies.find((e) => e.alive && e.targetable && e !== this.target && e.pos.distanceTo(this.pos) < this.aimRange);
+      if (second) {
+        this.ammo.hellfire--;
+        const from2 = rack[clamp(shown - 2, 0, rack.length - 1)].getWorldPosition(new THREE.Vector3());
+        g.projectiles.spawn('hellfire', 'player', from2, dir, { mult: this.hfMult, target: second });
+      }
+    }
     g.fx.puff(from.x, from.y, from.z, 2, true);
     g.audio.play('hellfire');
     g.vibrate(25);
@@ -390,14 +418,14 @@ export class Player {
     const t = w.target;
     const hd = dist2D(t.pos.x, t.pos.z, this.pos.x, this.pos.z);
     if (w.phase === 'down') {
-      w.len += 26 * dt;
+      w.len += 26 * this.winchSpeed * dt;
       if (hd > 10 || !t.alive) w.phase = 'retract';
       else if (ropeTop - w.len <= t.pos.y + (t.liftHeight || 2)) {
         w.phase = 'up';
         t.attached = true;
       }
     } else if (w.phase === 'up') {
-      w.len -= 15 * dt;
+      w.len -= 15 * this.winchSpeed * dt;
       t.pos.set(this.pos.x, ropeTop - w.len - (t.liftHeight || 2) + 0.5, this.pos.z);
       t.obj.position.copy(t.pos);
       if (w.len <= 0.5) {
@@ -437,7 +465,7 @@ export class Player {
         g.hud.toast('+ Боезапас', 'good', 1100);
       }
       g.audio.play('pickup');
-      g.addScore(100, t.pos);
+      g.addCredits(20 + (t.bounty || 0), t.pos);
     } else {
       this.passengers.push(t);
       g.audio.play('rescue');
@@ -446,21 +474,44 @@ export class Player {
     g.vibrate(20);
   }
 
+  // Любая наша база (главная или освобождённый аванпост): дозаправка,
+  // пополнение боезапаса, мелкий ремонт и высадка спасённых.
   updateBase(dt) {
     const g = this.game;
-    const b = g.world.base;
-    const d = dist2D(b.x, b.z, this.pos.x, this.pos.z);
     const speed = Math.hypot(this.vel.x, this.vel.z);
-    this.atBase = d < 11 && speed < 9;
+    const b = g.friendlyBases().find((fb) => dist2D(fb.x, fb.z, this.pos.x, this.pos.z) < (fb.radius || 12));
+    this.atBase = b && speed < 9 ? b : null;
     if (!this.atBase) return;
-    this.fuel = Math.min(100, this.fuel + dt * 6);
-    this.ammo.gun = Math.min(this.maxAmmo.gun, this.ammo.gun + dt * 60);
+    this.fuel = Math.min(100, this.fuel + dt * 8);
+    this.ammo.gun = Math.min(this.maxAmmo.gun, this.ammo.gun + dt * 80);
+    this.rearmT = (this.rearmT || 0) + dt;
+    if (this.rearmT > 1.2) {
+      this.rearmT = 0;
+      this.ammo.hydra = Math.min(this.maxAmmo.hydra, this.ammo.hydra + 2);
+      if (this.ammo.hellfire < this.maxAmmo.hellfire && Math.random() < 0.5) this.ammo.hellfire++;
+      this.armor = Math.min(this.maxArmor, this.armor + this.maxArmor * 0.03);
+    }
     if (this.passengers.length) {
       this.unloadT -= dt;
       if (this.unloadT <= 0) {
         this.unloadT = 0.55;
         const p = this.passengers.shift();
         g.onRescued(p);
+      }
+    }
+  }
+
+  // РЭБ срывает захват ракет ЗРК с некоторой вероятностью.
+  updateJamming(dt) {
+    const jam = this.stats.jam;
+    if (!jam) return;
+    this.jamT = (this.jamT || 0) + dt;
+    if (this.jamT < 1) return;
+    this.jamT = 0;
+    for (const pr of this.game.projectiles.list) {
+      if (pr.def.sam && pr.target === this && Math.random() < jam * 0.5) {
+        pr.target = null;
+        this.game.hud.toast('РЭБ сорвала захват ракеты', 'good', 1200);
       }
     }
   }
@@ -508,12 +559,13 @@ export class Player {
     if (Math.random() < 0.3) g.fx.spark(this.pos.x, this.pos.y, this.pos.z, 3);
     this.obj.position.copy(this.pos);
     this.obj.rotation.set(0.4, this.yaw, 0.3, 'YXZ');
-    if (this.pos.y <= 0.8) {
-      this.pos.y = 0.8;
+    const gy = Math.max(g.world.heightAt(this.pos.x, this.pos.z), g.world.waterLevel);
+    if (this.pos.y <= gy + 0.8) {
+      this.pos.y = gy + 0.8;
       this.state = 'dead';
       this.alive = false;
-      g.fx.explosion(this.pos.x, 1.5, this.pos.z, 2.4, 0x5c8f3c);
-      g.fx.addFire(this.pos.x, 1, this.pos.z, 8, 1.3);
+      g.fx.explosion(this.pos.x, gy + 1.5, this.pos.z, 2.4, 0x5c8f3c);
+      g.fx.addFire(this.pos.x, gy + 1, this.pos.z, 8, 1.3);
       g.audio.play('boomBig');
       g.shake(1.5);
       g.vibrate([80, 40, 120]);
