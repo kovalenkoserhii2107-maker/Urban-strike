@@ -127,7 +127,7 @@
         </div>
         <div class="menu-buttons">
           <button class="btn primary big" id="btn-play">В бой</button>
-          <button class="btn accent" id="btn-coop">👥 Совместно (Wi-Fi)</button>
+          <button class="btn accent" id="btn-coop">👥 Совместно</button>
           <button class="btn" id="btn-missions">Сюжет</button>
           <button class="btn" id="btn-hangar">Ангар <span class="pill" id="menu-credits"></span></button>
           <button class="btn" id="btn-settings">Настройки</button>
@@ -142,69 +142,43 @@
     <section id="coop" class="screen">
       <div class="panel wide coop-panel">
         <div class="panel-head">
-          <button class="back" data-back="menu">←</button>
-          <h2>Совместная игра (Wi-Fi / LAN)</h2>
+          <button class="back" data-back="menu" id="coop-back">←</button>
+          <h2>Совместная игра</h2>
         </div>
         <div class="coop-body">
           <p class="coop-desc">
-            Играйте вдвоём на одном острове: прикрывайте друг друга, штурмуйте аванпосты и спасайте сбитого напарника лебёдкой!
+            Летайте вдвоём на одном острове: прикрывайте друг друга, штурмуйте аванпосты и спасайте сбитого напарника лебёдкой.
           </p>
 
-          <div class="tabs coop-tabs">
-            <button class="tab on" id="tab-btn-lan">Локальная сеть / Wi-Fi</button>
-            <button class="tab" id="tab-btn-webrtc">Прямое P2P (WebRTC)</button>
-          </div>
-
-          <!-- Вкладка 1: Локальная сеть / WebSocket -->
-          <div id="tab-lan" class="coop-tab-content">
-            <div class="coop-roles">
-              <div class="coop-card host-card active" data-role="host">
-                <div class="card-badge">ХОСТ</div>
-                <h3>Создать вылет</h3>
-                <p>Вы управляете миром и аванпостами. Напарник подключится к вашей игре.</p>
-                <div class="input-group">
-                  <label>Порт сервера:</label>
-                  <input type="text" id="host-port" value="8080" />
-                </div>
-                <div class="host-tip">Запустите <code>node server.js</code> на ПК/ноутбуке в Wi-Fi сети.</div>
-                <button class="btn primary" id="btn-create-host">Создать лобби (Хост)</button>
-              </div>
-
-              <div class="coop-card client-card" data-role="client">
-                <div class="card-badge">КЛИЕНТ</div>
-                <h3>Присоединиться</h3>
-                <p>Подключитесь к ведущему по его IP адресу в этой же сети Wi-Fi.</p>
-                <div class="input-group">
-                  <label>IP адрес хоста:</label>
-                  <input type="text" id="client-ip" placeholder="192.168.1.45:8080" />
-                </div>
-                <button class="btn accent" id="btn-join-client">Подключиться к Хосту</button>
-              </div>
+          <!-- Шаг 1: создать или присоединиться -->
+          <div id="coop-start" class="coop-roles">
+            <button type="button" class="coop-card host-card" id="btn-coop-host">
+              <span class="card-badge">ВЕДУЩИЙ</span>
+              <h3>Создать игру</h3>
+              <p>Получите код из 4 символов и отправьте его напарнику.</p>
+            </button>
+            <div class="coop-card client-card">
+              <span class="card-badge">ВЕДОМЫЙ</span>
+              <h3>Присоединиться</h3>
+              <input type="text" id="coop-code-input" class="coop-code-input" maxlength="4" placeholder="КОД"
+                     autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Код игры" />
+              <button type="button" class="btn accent" id="btn-coop-join">Подключиться</button>
             </div>
           </div>
 
-          <!-- Вкладка 2: WebRTC P2P -->
-          <div id="tab-webrtc" class="coop-tab-content hidden">
-            <div class="webrtc-box">
-              <p>Прямое соединение без сервера (работает в браузере через обмен кодом комнаты):</p>
-              <div class="row">
-                <button class="btn" id="btn-p2p-offer">1. Создать код комнаты (Хост)</button>
-                <button class="btn" id="btn-p2p-answer">2. Вставить код и ответить (Клиент)</button>
-              </div>
-              <textarea id="p2p-code" rows="3" placeholder="Здесь появится код подключения или вставьте код от напарника..."></textarea>
-              <div class="row">
-                <button class="btn primary" id="btn-p2p-apply">Применить код</button>
-                <button class="btn ghost" id="btn-p2p-copy">Копировать</button>
-              </div>
-            </div>
+          <!-- Шаг 2 у ведущего: код и приглашение -->
+          <div id="coop-room" class="coop-room hidden">
+            <div class="coop-code-label">Код игры</div>
+            <div class="coop-code" id="coop-code">····</div>
+            <button type="button" class="btn" id="btn-coop-share">📤 Отправить приглашение</button>
           </div>
 
-          <!-- Статус подключения и запуск -->
           <div class="coop-status-bar">
-            <div id="coop-status-badge" class="badge idle">Статус: Не подключено</div>
-            <div id="coop-partner-info" class="partner-info hidden">Напарник: <b>Ведомый</b> (готов к вылету)</div>
-            <button class="btn primary big" id="btn-launch-coop" disabled>Взлёт вдвоём 🚁🚁</button>
+            <div id="coop-status-badge" class="badge idle hidden"></div>
+            <button type="button" class="btn primary big hidden" id="btn-launch-coop">Взлёт вдвоём 🚁</button>
+            <button type="button" class="btn ghost hidden" id="btn-coop-cancel">Отменить</button>
           </div>
+          <p class="coop-hint">Надёжнее всего — оба телефона в одной сети Wi-Fi. Нужен браузер Safari или Chrome.</p>
         </div>
       </div>
     </section>

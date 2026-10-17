@@ -2,6 +2,7 @@ import { Game, STORY } from './game/game.js';
 import { SKINS } from './game/viper.js';
 import { MODULES, MODULE_ORDER, SKIN_UNLOCK, moduleLevel, nextLevel, canUpgrade, missingRequirements } from './game/modules.js';
 import { MapScreen } from './ui/map.js';
+import { cleanRoomCode, inviteLink, ROOM_CODE_LEN } from './game/net.js';
 import { save, persist, resetProgress } from './core/save.js';
 import { isStandalone, isIOS, canPrompt, promptInstall, onInstallChange, registerSW, goFullscreen } from './pwa.js';
 
@@ -109,6 +110,7 @@ function refreshMenu() {
 }
 
 function goMenu() {
+  if (game.coopMode) game.endCoop();
   setGameUI(false);
   refreshMenu();
   show('menu');
@@ -357,8 +359,20 @@ async function bootInner() {
   await new Promise((r) => setTimeout(r, 300));
   const skip = session.get('install-skipped');
   window.__stormhawkReady = true;
+  initCoop();
+  // ссылка-приглашение: сразу к совместной игре, без экрана установки
+  const params = new URLSearchParams(location.search);
+  const invite = cleanRoomCode(params.get('coop'));
+  if (params.has('coop')) {
+    params.delete('coop');
+    const q = params.toString();
+    history.replaceState(null, '', location.pathname + (q ? '?' + q : '') + location.hash);
+  }
   await transition(() => {
-    if (!isStandalone() && !skip && !embedded) openInstall();
+    if (invite.length === ROOM_CODE_LEN) {
+      goMenu();
+      openCoop(invite);
+    } else if (!isStandalone() && !skip && !embedded) openInstall();
     else goMenu();
   });
 }
@@ -568,167 +582,129 @@ document.addEventListener('gesturestart', (e) => e.preventDefault());
 document.addEventListener('dblclick', (e) => e.preventDefault());
 
 
-// ---------- Совместная игра (Wi-Fi) ----------
-let coopRole = 'host';
-let coopTransport = 'ws';
-let coopReady = false;
+// ---------- Совместная игра ----------
+// Ведущий: «Создать игру» → код → «Взлёт вдвоём». Ведомый: вводит код
+// (или открывает ссылку-приглашение) и ждёт — вылет начнётся у обоих
+// по кнопке ведущего. Обработчики вешаются один раз, экран лишь
+// показывает текущее состояние сети.
+const COOP_TEXT = {
+  connecting: (r) => (r === 'host' ? 'Создаём игру…' : 'Подключаемся…'),
+  waiting: () => 'Ждём напарника… Отправьте ему код или приглашение.',
+  connected: (r) => (r === 'host' ? 'Напарник на связи ✓' : 'Подключено ✓ Ждём, когда ведущий начнёт вылет…'),
+  reconnecting: () => 'Связь прервалась — восстанавливаем…',
+};
 
-$('#btn-coop')?.addEventListener('click', () => {
-  click();
-  show('coop');
-  initCoopUI();
-});
-
-function initCoopUI() {
+function renderCoop(errorText = '') {
+  const net = game.net;
+  const st = net.status;
+  const busy = st !== 'idle';
+  $('#coop-start').classList.toggle('hidden', busy);
+  $('#coop-room').classList.toggle('hidden', !(net.isHost && (st === 'waiting' || st === 'connected' || st === 'reconnecting')));
+  $('#coop-code').textContent = net.code || '····';
   const badge = $('#coop-status-badge');
-  const launchBtn = $('#btn-launch-coop');
-  const partnerInfo = $('#coop-partner-info');
+  const text = errorText || (COOP_TEXT[st] ? COOP_TEXT[st](net.role) : '');
+  badge.textContent = text;
+  badge.className = 'badge ' + (errorText ? 'error' : st === 'connected' ? 'connected' : 'idle');
+  badge.classList.toggle('hidden', !text);
+  $('#btn-launch-coop').classList.toggle('hidden', !(net.isHost && st === 'connected'));
+  $('#btn-coop-cancel').classList.toggle('hidden', !busy);
+}
 
-  // Вкладки LAN / WebRTC
-  $('#tab-btn-lan')?.addEventListener('click', () => {
-    click();
-    coopTransport = 'ws';
-    $('#tab-btn-lan').classList.add('on');
-    $('#tab-btn-webrtc').classList.remove('on');
-    $('#tab-lan').classList.remove('hidden');
-    $('#tab-webrtc').classList.add('hidden');
-  });
+function openCoop(code = '') {
+  show('coop');
+  renderCoop();
+  if (code) {
+    $('#coop-code-input').value = code;
+    if (game.net.status === 'idle') game.net.join(code);
+  }
+}
 
-  $('#tab-btn-webrtc')?.addEventListener('click', () => {
-    click();
-    coopTransport = 'webrtc';
-    $('#tab-btn-webrtc').classList.add('on');
-    $('#tab-btn-lan').classList.remove('on');
-    $('#tab-webrtc').classList.remove('hidden');
-    $('#tab-lan').classList.add('hidden');
-  });
-
-  // Выбор карточки роли (Хост / Клиент)
-  $$('.coop-card').forEach((card) => {
-    card.addEventListener('click', (e) => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
-      $$('.coop-card').forEach((c) => c.classList.remove('active'));
-      card.classList.add('active');
-      coopRole = card.dataset.role;
-    });
-  });
-
-  // Создать лобби (Хост)
-  $('#btn-create-host')?.addEventListener('click', () => {
-    click();
-    coopRole = 'host';
-    badge.className = 'badge idle';
-    badge.textContent = 'Статус: Ожидание подключения напарника…';
-    const port = $('#host-port').value || '8080';
-    const hostUrl = `ws://${location.hostname || 'localhost'}:${port}`;
-    game.net.connectWS(hostUrl, 'host', () => {
-      badge.textContent = 'Хост активен. Ждём второго игрока…';
-    }, (err) => {
-      badge.textContent = 'Запустите: node server.js';
-    });
-  });
-
-  // Подключиться (Клиент)
-  $('#btn-join-client')?.addEventListener('click', () => {
-    click();
-    coopRole = 'client';
-    const ip = $('#client-ip').value.trim() || `${location.hostname || 'localhost'}:8080`;
-    const wsUrl = ip.startsWith('ws://') ? ip : `ws://${ip}`;
-    badge.className = 'badge idle';
-    badge.textContent = `Подключение к ${ip}…`;
-    game.net.connectWS(wsUrl, 'client', () => {
-      badge.className = 'badge connected';
-      badge.textContent = 'Подключено к Хосту!';
-      launchBtn.disabled = false;
-      partnerInfo.classList.remove('hidden');
-      partnerInfo.innerHTML = 'Напарник: <b>Ведущий (Хост)</b>';
-    }, (err) => {
-      badge.className = 'badge idle';
-      badge.textContent = 'Ошибка: проверьте IP адрес и Wi-Fi';
-    });
-  });
-
-  // WebRTC P2P
-  $('#btn-p2p-offer')?.addEventListener('click', async () => {
-    click();
-    coopRole = 'host';
-    coopTransport = 'webrtc';
-    badge.textContent = 'Генерация кода комнаты…';
-    await game.net.initWebRTC('host', (signal) => {
-      if (signal.type === 'offer') {
-        const code = btoa(JSON.stringify(signal));
-        $('#p2p-code').value = code;
-        badge.textContent = 'Код создан! Отправьте его напарнику';
-      }
-    }, () => {
-      badge.className = 'badge connected';
-      badge.textContent = 'P2P соединение установлено!';
-      launchBtn.disabled = false;
-      partnerInfo.classList.remove('hidden');
-    });
-  });
-
-  $('#btn-p2p-answer')?.addEventListener('click', async () => {
-    click();
-    coopRole = 'client';
-    coopTransport = 'webrtc';
-    const raw = $('#p2p-code').value.trim();
-    if (!raw) return alert('Сначала вставьте код от Хоста!');
-    try {
-      const signal = JSON.parse(atob(raw));
-      await game.net.initWebRTC('client', null, () => {
-        badge.className = 'badge connected';
-        badge.textContent = 'P2P соединение установлено!';
-        launchBtn.disabled = false;
-        partnerInfo.classList.remove('hidden');
-      });
-      const answer = await game.net.handleWebRTCSignal(signal);
-      if (answer) {
-        $('#p2p-code').value = btoa(JSON.stringify(answer));
-        badge.textContent = 'Ответный код создан! Отправьте его Хосту';
-      }
-    } catch {
-      alert('Неверный код подключения!');
-    }
-  });
-
-  $('#btn-p2p-apply')?.addEventListener('click', async () => {
-    click();
-    const raw = $('#p2p-code').value.trim();
-    if (!raw) return;
-    try {
-      const signal = JSON.parse(atob(raw));
-      await game.net.handleWebRTCSignal(signal);
-      badge.className = 'badge connected';
-      badge.textContent = 'P2P рукопожатие завершено!';
-      launchBtn.disabled = false;
-    } catch {
-      alert('Неверный код ответа!');
-    }
-  });
-
-  $('#btn-p2p-copy')?.addEventListener('click', () => {
-    click();
-    const ta = $('#p2p-code');
-    ta.select();
-    navigator.clipboard?.writeText(ta.value);
-    badge.textContent = 'Код скопирован в буфер обмена!';
-  });
-
-  // Отслеживание подключения напарника
-  game.net.on('peer_hello', () => {
-    badge.className = 'badge connected';
-    badge.textContent = 'Напарник на связи!';
-    launchBtn.disabled = false;
-    partnerInfo.classList.remove('hidden');
-    partnerInfo.innerHTML = `Напарник: <b>${coopRole === 'host' ? 'Ведомый (P2)' : 'Ведущий (P1)'}</b> готов!`;
-  });
-
-  // Кнопка Взлёт
-  launchBtn.addEventListener('click', () => {
-    click();
+async function startCoopGame(role) {
+  goFullscreen();
+  game.audio.stopMusic();
+  await transition(() => {
     hideScreens();
-    game.startCoop(coopRole, coopTransport);
+    setGameUI(true);
+    game.startCoop(role);
+  });
+}
+
+function initCoop() {
+  const net = game.net;
+  net.on('status', () => {
+    if (current === 'coop') renderCoop();
+  });
+  net.on('error', (text) => {
+    if (current === 'coop') renderCoop(text);
+    else if (game.coopMode) game.hud.toast(text, 'bad', 3500);
+  });
+  net.on('start', () => {
+    if (game.coopMode) return;
+    startCoopGame('client');
+  });
+
+  $('#btn-coop').addEventListener('click', () => {
+    click();
+    openCoop();
+  });
+  $('#btn-coop-host').addEventListener('click', () => {
+    click();
+    net.host();
+  });
+  const input = $('#coop-code-input');
+  const join = () => {
+    const code = cleanRoomCode(input.value);
+    input.value = code;
+    if (code.length === ROOM_CODE_LEN) net.join(code);
+    else renderCoop('Введите код из 4 символов — его показывает ведущий.');
+  };
+  input.addEventListener('input', () => {
+    const code = cleanRoomCode(input.value);
+    if (input.value !== code) input.value = code;
+    // все четыре символа набраны — подключаемся без лишнего нажатия
+    if (code.length === ROOM_CODE_LEN && net.status === 'idle') join();
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') join();
+  });
+  $('#btn-coop-join').addEventListener('click', () => {
+    click();
+    join();
+  });
+  $('#btn-coop-share').addEventListener('click', async () => {
+    click();
+    const url = inviteLink(net.code);
+    const text = `Летим вместе в Stormhawk! Код игры: ${net.code}`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: 'Stormhawk', text, url });
+        return;
+      }
+    } catch (e) {
+      if (e?.name === 'AbortError') return;
+    }
+    try {
+      await navigator.clipboard.writeText(`${text}\n${url}`);
+      renderCoop();
+      $('#coop-status-badge').textContent = 'Приглашение скопировано — отправьте его напарнику.';
+    } catch {
+      renderCoop(`Ссылка: ${url}`);
+    }
+  });
+  $('#btn-coop-cancel').addEventListener('click', () => {
+    click();
+    net.leave();
+    renderCoop();
+  });
+  // «Назад» из лобби — тоже выход из игры, чтобы напарник не ждал
+  $('#coop-back').addEventListener('click', () => {
+    if (!game.coopMode) net.leave();
+  });
+  $('#btn-launch-coop').addEventListener('click', () => {
+    click();
+    if (!net.isConnected) return renderCoop('Напарник ещё не подключился.');
+    net.send({ type: 'start' });
+    startCoopGame('host');
   });
 }
 
