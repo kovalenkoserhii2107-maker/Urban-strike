@@ -482,6 +482,7 @@ export class Player {
       g.addCredits(20 + (t.bounty || 0), t.pos);
     } else {
       this.passengers.push(t);
+      if (g.coopMode && g.net?.isConnected && t.rid) g.net.send({ type: 'picked', rid: t.rid });
       g.audio.play('rescue');
       g.hud.toast(`На борту: ${this.passengers.length}/${this.capacity}. Доставь на базу!`, 'good', 1600);
     }

@@ -467,6 +467,7 @@ export class World {
     const nodes = this.graph.nodes.filter((n) => n.region === region);
     for (let t = 0; t < 40; t++) {
       const a = rng.pick(nodes);
+      if (!a?.nbrs.length) continue;
       const b = rng.pick(a.nbrs);
       const k = rng.float(0.15, 0.85);
       const x = a.x + (b.x - a.x) * k + rng.float(-4, 4), z = a.z + (b.z - a.z) * k + rng.float(-4, 4);

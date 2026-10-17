@@ -40,8 +40,10 @@ export class Enemy {
   aimPoint() {
     return this._aim.set(this.pos.x, this.pos.y + this.centerY, this.pos.z);
   }
-  hit(dmg) {
+  // src: 'remote' — попадание ракеты напарника (награду за него получает он)
+  hit(dmg, src) {
     if (!this.alive || this.invulnerable) return;
+    this.lastHit = src;
     this.hp -= dmg;
     this.flash = 0.1;
     if (this.hp <= 0) {

@@ -8,6 +8,8 @@ import { T } from './textures.js';
 // Курорт «Золотые Пески», горный бункер «Объект-42», 5 деревень и 14 аванпостов.
 
 export const WORLD = { half: 1400, waterY: -2.2, step: 5 };
+// Дамба: уровень дна водохранилища и высота гребня стены.
+export const DAM = { upper: 16, crest: 26 };
 
 export const LAYOUT = {
   city: { name: 'Порт-Лазурь', x: -120, z: 260, hx: 262, hz: 262 },
@@ -120,8 +122,12 @@ export class Terrain {
     const rects = [
       LAYOUT.city, LAYOUT.fob, LAYOUT.industrial, LAYOUT.airbase,
       LAYOUT.refinery, LAYOUT.resort,
+      // коридор от нефтебухты к берегу: по нему идёт причал к танкеру
+      { x: LAYOUT.refinery.x + LAYOUT.refinery.hx + 70, z: LAYOUT.refinery.z, hx: 70, hz: 40, h: 0, fade: 30 },
       { ...LAYOUT.radar, h: 36, fade: 80 },
-      { ...LAYOUT.dam, h: 22, fade: 70 },
+      // дамба: водохранилище выше по ущелью, долина ниже стены
+      { x: LAYOUT.dam.x, z: LAYOUT.dam.z - LAYOUT.dam.hz / 2 - 10, hx: LAYOUT.dam.hx, hz: LAYOUT.dam.hz / 2, h: DAM.upper, fade: 50 },
+      { x: LAYOUT.dam.x, z: LAYOUT.dam.z + LAYOUT.dam.hz / 2 + 10, hx: LAYOUT.dam.hx, hz: LAYOUT.dam.hz / 2, h: 0, fade: 50 },
       { ...LAYOUT.bunker, h: 78, fade: 80 },
     ].map((z) => ({ ...z, h: z.h ?? 0, fade: z.fade ?? 80 }));
     const circles = [

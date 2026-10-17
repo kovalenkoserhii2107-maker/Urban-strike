@@ -1,12 +1,14 @@
 import * as THREE from 'three';
 import { pbr, metal, glow, glass, G } from './materials.js';
-import { LAYOUT, WORLD, landSdf } from './terrain.js';
+import { LAYOUT, WORLD, DAM, landSdf } from './terrain.js';
+import { T } from './textures.js';
 import { addBuilding } from './buildings.js';
 import { buildGrid, streetDressing, flushSurfaces } from './city.js';
 import { PropSet } from './props.js';
 import { createHelipad, enableShadows } from './models.js';
 import { createViper } from './viper.js';
 import { fbm } from './noise.js';
+import { Rng } from '../core/utils.js';
 
 function place(world, obj, x, z, y = null) {
   obj.position.set(x, y ?? world.heightAt(x, z), z);
@@ -125,11 +127,14 @@ function buildIndustrial(world) {
   const rng = world.rng, S = world.surfaces;
   const xs = [300, 385, 470, 555, 640], zs = [150, 225, 300, 375, 450];
   const { blocks } = buildGrid(world, 'industrial', xs, zs, { markings: true });
+  const yardRng = new Rng(77);
   const yards = [];
   for (const b of blocks) {
     S.concrete.slab(b.x0 + 3, b.z0 + 3, b.x1 - 3, b.z1 - 3, 0, 0.18);
     const r = rng.next();
-    if (yards.length < 4 && (b.i + b.j) % 3 === 1 && rng.chance(0.8)) {
+    // свой генератор: площадки заданий не зависят от густоты деревьев
+    // и машин (она разная при разном качестве графики у напарников)
+    if (yards.length < 4 && (b.i + b.j) % 3 === 1 && yardRng.chance(0.8)) {
       yards.push({ x: b.cx, z: b.cz });
       continue;
     }
@@ -485,9 +490,13 @@ function buildRefinery(world) {
   addBuilding(world, R.x - 20, R.z + 60, 36, 24, 12, 'warehouse', { facade: 'panel', tint: 0xc8c2b6, y });
   addBuilding(world, R.x + 40, R.z - 70, 28, 20, 10, 'flat', { facade: 'panel', tint: 0xb5c0d0, y });
 
-  // Причал нефтеналивных барж в заливе
-  S.concrete.slab(R.x + 150, R.z - 30, R.x + 290, R.z + 30, 0, 0.4);
-  for (let k = 0; k < 6; k++) {
+  // Причал до настоящей кромки воды: ищем её к востоку от района
+  let shoreX = R.x + R.hx;
+  while (shoreX < WORLD.half - 60 && world.heightAt(shoreX, R.z) > WORLD.waterY - 1.5) shoreX += 5;
+  let deepX = shoreX + 30;
+  while (deepX < WORLD.half - 40 && world.heightAt(deepX, R.z + 55) > WORLD.waterY - 5) deepX += 5;
+  S.concrete.slab(R.x + 150, R.z - 30, deepX + 10, R.z + 30, 0, 0.4);
+  for (let k = 0; R.x + 160 + k * 22 < deepX; k++) {
     const bollard = new THREE.Mesh(G.cyl(0.3, 0.35, 1.2, 8), metal(0x222222));
     place(world, bollard, R.x + 160 + k * 22, R.z + 32, 0.4);
   }
@@ -500,8 +509,8 @@ function buildRefinery(world) {
   const deckHouse = new THREE.Mesh(G.box(14, 9, 16), pbr(0xf2f2f0, { roughness: 0.5 }));
   deckHouse.position.set(0, 10, -30);
   tanker.add(deckHouse);
-  place(world, tanker, R.x + 230, R.z + 55, WORLD.waterY + 1.2);
-  world.addBuildingRecord({ group: tanker, x: R.x + 230, y: 0, z: R.z + 55, w: 18, d: 85, h: 16, top: 16, hp: 900, maxHp: 900, alive: true, crate: 'fuel', wallColor: 0x2b333e });
+  place(world, tanker, deepX, R.z + 55, WORLD.waterY - 1);
+  world.addBuildingRecord({ group: tanker, x: deepX, y: WORLD.waterY - 1, z: R.z + 55, w: 18, d: 85, h: 16, top: 16, hp: 900, maxHp: 900, alive: true, crate: 'fuel', wallColor: 0x2b333e });
 
   const n = world.graph.add(R.x, y, R.z);
   n.region = 'refinery';
@@ -511,7 +520,7 @@ function buildRefinery(world) {
 function buildRadarComplex(world) {
   const R = LAYOUT.radar, S = world.surfaces;
   const y = 36;
-  S.concrete.slab(R.x - R.hx + 10, R.z - R.hz + 10, R.x + R.hx - 10, R.z + R.hz - 10, y, 0.2);
+  S.concrete.slab(R.x - R.hx + 10, R.z - R.hz + 10, R.x + R.hx - 10, R.z + R.hz - 10, y, y + 0.2);
   
   // 3 радиопрозрачных белых купола
   for (let i = 0; i < 3; i++) {
@@ -558,28 +567,41 @@ function buildRadarComplex(world) {
 // ---------- Дамба Чёрного Ущелья ----------
 function buildDam(world) {
   const D = LAYOUT.dam, S = world.surfaces;
-  const topY = 22, bottomY = 0;
-  
+  // Рельеф здесь двухуровневый (см. terrain.js): к северу водохранилище
+  // на высоте DAM.upper, к югу долина на нуле. Стена стоит на границе.
+  const topY = DAM.crest, len = D.hx * 2 + 40;
+  const concrete = pbr(0x8f949a, { map: T.concrete(), roughness: 0.92 });
   const damGroup = new THREE.Group();
-  const wall = new THREE.Mesh(G.box(140, topY, 24), pbr(0x8a9096, { roughness: 0.9 }));
+  const wall = new THREE.Mesh(G.box(len, topY, 20), concrete);
   wall.position.y = topY / 2;
   damGroup.add(wall);
-
-  for (let i = -2; i <= 2; i++) {
-    const chute = new THREE.Mesh(G.box(12, 16, 26), pbr(0x5a6066, { roughness: 0.8, metalness: 0.4 }));
-    chute.position.set(i * 22, topY - 7, 0);
-    damGroup.add(chute);
+  // контрфорсы и водосбросы на низовой (южной) стороне
+  for (let i = -3; i <= 3; i++) {
+    const buttress = new THREE.Mesh(G.box(6, topY - 2, 10), concrete);
+    buttress.position.set(i * 44, (topY - 2) / 2, 14);
+    damGroup.add(buttress);
   }
+  for (let i = -1; i <= 1; i++) {
+    const chute = new THREE.Mesh(G.box(12, 3, 30), pbr(0x5a6066, { roughness: 0.6, metalness: 0.4 }));
+    chute.position.set(i * 22, topY - 10, 20);
+    chute.rotation.x = 0.55;
+    damGroup.add(chute);
+    // пена сброшенной воды у подножия
+    const foam = new THREE.Mesh(G.box(14, 0.4, 14), pbr(0xeef4f6, { roughness: 0.6 }));
+    foam.position.set(i * 22, 0.3, 36);
+    damGroup.add(foam);
+  }
+  place(world, damGroup, D.x, D.z, 0);
+  world.addBuildingRecord({ group: damGroup, x: D.x, y: 0, z: D.z, w: len, d: 20, h: topY, top: topY, hp: 2000, maxHp: 2000, alive: true, crate: null, wallColor: 0x8a9096, indestructible: true });
+  S.asphalt.quad(D.x - len / 2, D.z - 6, D.x + len / 2, D.z + 6, topY + 0.1);
+  // водохранилище за стеной
+  S.pond.quad(D.x - D.hx, D.z - D.hz - 20, D.x + D.hx, D.z - 10, DAM.upper + 3);
 
-  S.asphalt.quad(D.x - 70, D.z - 7, D.x + 70, D.z + 7, topY + 0.1);
-  place(world, damGroup, D.x, D.z, bottomY);
-  world.addBuildingRecord({ group: damGroup, x: D.x, y: bottomY, z: D.z, w: 140, d: 24, h: topY, top: topY, hp: 2000, maxHp: 2000, alive: true, crate: null, wallColor: 0x8a9096, indestructible: true });
-
-  const powerhouse = addBuilding(world, D.x, D.z + 40, 48, 22, 14, 'flat', { facade: 'panel', tint: 0xc4c7cc, y: bottomY });
+  const powerhouse = addBuilding(world, D.x, D.z + 52, 48, 22, 14, 'flat', { facade: 'panel', tint: 0xc4c7cc, y: 0 });
   powerhouse.hp = 500;
 
   for (let i = 0; i < 3; i++) {
-    const px = D.x - 90 + i * 90, pz = D.z + 90;
+    const px = D.x - 90 + i * 90, pz = D.z + 100;
     const pylon = new THREE.Group();
     const mast = new THREE.Mesh(G.cyl(0.6, 2.2, 28, 4), metal(0x7a8288));
     mast.position.y = 14;
@@ -587,10 +609,11 @@ function buildDam(world) {
     const arm = new THREE.Mesh(G.box(18, 1.2, 1.2), metal(0x7a8288));
     arm.position.y = 24;
     pylon.add(arm);
-    place(world, pylon, px, pz, bottomY);
+    place(world, pylon, px, pz, 0);
   }
 
-  const n = world.graph.add(D.x, topY, D.z);
+  // узел дорог — в долине, куда приходит трасса
+  const n = world.graph.add(D.x, 0, D.z + 40);
   n.region = 'dam';
 }
 
@@ -598,7 +621,7 @@ function buildDam(world) {
 function buildResort(world) {
   const R = LAYOUT.resort, S = world.surfaces;
   const y = 0;
-  S.asphalt.quad(R.x - R.hx + 20, R.z - R.hz + 20, R.x + R.hx - 20, R.z + R.hz - 20, 0.05);
+  S.paving.quad(R.x - R.hx + 20, R.z - R.hz + 20, R.x + R.hx - 20, R.z + R.hz - 20, 0.05);
 
   const hotel = addBuilding(world, R.x, R.z - 40, 56, 32, 26, 'flat', { facade: 'glass', tint: 0xffffff, y, hp: 800 });
   const pool = new THREE.Mesh(G.box(24, 0.6, 12), pbr(0x00b0ff, { roughness: 0.1, metalness: 0.2 }));
@@ -631,7 +654,7 @@ function buildResort(world) {
 function buildBunker(world) {
   const B = LAYOUT.bunker, S = world.surfaces;
   const y = 78;
-  S.concrete.slab(B.x - 60, B.z - 50, B.x + 60, B.z + 50, y, 0.2);
+  S.concrete.slab(B.x - 60, B.z - 50, B.x + 60, B.z + 50, y, y + 0.2);
 
   const gateGroup = new THREE.Group();
   const arch = new THREE.Mesh(G.box(28, 16, 12), pbr(0x444a50, { roughness: 0.9 }));
