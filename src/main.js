@@ -5,6 +5,24 @@ import { isStandalone, isIOS, canPrompt, promptInstall, onInstallChange, registe
 registerSW();
 
 const $ = (s) => document.querySelector(s);
+// Встроенная версия (просмотр по ссылке): установка PWA там недоступна.
+const embedded = window.__STORMHAWK_EMBED__ === true;
+const session = {
+  get: (k) => {
+    try {
+      return session.get(k);
+    } catch {
+      return null;
+    }
+  },
+  set: (k, v) => {
+    try {
+      session.set(k, v);
+    } catch {
+      /* хранилище недоступно */
+    }
+  },
+};
 const $$ = (s) => [...document.querySelectorAll(s)];
 let current = 'splash';
 let game;
@@ -68,7 +86,7 @@ function click() {
 // ---------- меню ----------
 function refreshMenu() {
   $('#menu-credits').textContent = save.credits ? `💰 ${save.credits}` : '';
-  $('#btn-menu-install').classList.toggle('hidden', isStandalone() || (!canPrompt() && !isIOS()));
+  $('#btn-menu-install').classList.toggle('hidden', embedded || isStandalone() || (!canPrompt() && !isIOS()));
 }
 
 function goMenu() {
@@ -273,9 +291,9 @@ async function boot() {
   fill.style.width = '100%';
   text.textContent = 'Готово!';
   await new Promise((r) => setTimeout(r, 350));
-  const skip = sessionStorage.getItem('install-skipped');
+  const skip = session.get('install-skipped');
   await transition(() => {
-    if (!isStandalone() && !skip) openInstall();
+    if (!isStandalone() && !skip && !embedded) openInstall();
     else goMenu();
   });
 }
@@ -301,7 +319,7 @@ $('#btn-install').addEventListener('click', async () => {
   if (canPrompt()) {
     const res = await promptInstall();
     if (res === 'accepted') {
-      sessionStorage.setItem('install-skipped', '1');
+      session.set('install-skipped', '1');
       goMenu();
     }
   } else {
@@ -310,7 +328,7 @@ $('#btn-install').addEventListener('click', async () => {
 });
 $('#btn-skip-install').addEventListener('click', () => {
   click();
-  sessionStorage.setItem('install-skipped', '1');
+  session.set('install-skipped', '1');
   goMenu();
 });
 $('#btn-menu-install').addEventListener('click', () => {
@@ -381,8 +399,20 @@ $('#opt-vibration').addEventListener('change', (e) => {
   save.settings.vibration = e.target.checked;
   persist();
 });
-$('#btn-reset').addEventListener('click', () => {
-  if (!confirm('Сбросить весь прогресс, звёзды и улучшения?')) return;
+let resetArmed = false;
+$('#btn-reset').addEventListener('click', (e) => {
+  // подтверждение вторым нажатием: системные диалоги работают не везде
+  if (!resetArmed) {
+    resetArmed = true;
+    e.target.textContent = 'Нажми ещё раз, чтобы сбросить';
+    setTimeout(() => {
+      resetArmed = false;
+      e.target.textContent = 'Сбросить прогресс';
+    }, 3000);
+    return;
+  }
+  resetArmed = false;
+  e.target.textContent = 'Сбросить прогресс';
   Object.assign(save, { unlocked: 1, stars: {}, best: {}, credits: 0, upgrades: { armor: 0, fuel: 0, gun: 0, rockets: 0 } });
   persist();
   refreshMenu();
