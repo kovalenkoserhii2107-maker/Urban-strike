@@ -1,13 +1,14 @@
 {
   "name": "stormhawk",
   "private": true,
-  "version": "0.3.0",
-  "description": "Stormhawk: мобильный PWA-боевик на вертолёте в духе 16-битной классики",
+  "version": "0.4.0",
+  "description": "Stormhawk: мобильный PWA-боевик на вертолёте в духе 16-битной классики с совместной игрой по Wi-Fi",
   "type": "module",
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
-    "preview": "vite preview --host"
+    "preview": "vite preview --host",
+    "coop": "node server.js"
   },
   "dependencies": {
     "three": "0.186.1"
