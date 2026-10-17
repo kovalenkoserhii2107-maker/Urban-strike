@@ -210,6 +210,7 @@ function renderHangar() {
 // ---------- настройки ----------
 function renderSettings() {
   for (const b of $$('#quality-seg button')) b.classList.toggle('on', b.dataset.q === save.settings.quality);
+  for (const b of $$('#camera-seg button')) b.classList.toggle('on', b.dataset.cam === save.settings.camera);
   $('#opt-sound').checked = save.settings.sound;
   $('#opt-music').checked = save.settings.music;
   $('#opt-vibration').checked = save.settings.vibration;
@@ -374,6 +375,13 @@ for (const b of $$('#quality-seg button'))
     save.settings.quality = b.dataset.q;
     persist();
     game.setQuality(b.dataset.q);
+    renderSettings();
+  });
+for (const b of $$('#camera-seg button'))
+  b.addEventListener('click', () => {
+    click();
+    save.settings.camera = b.dataset.cam;
+    persist();
     renderSettings();
   });
 $('#opt-sound').addEventListener('change', (e) => {

@@ -34,6 +34,9 @@ export class HUD {
       floaters: $('#floaters'),
       winch: $('#winch-hint'),
       base: $('#base-hint'),
+      tbar: $('#target-bar'),
+      tname: $('#target-bar .tname'),
+      tfill: $('#target-bar .fill'),
     };
     this.radar = $('#radar');
     this.rctx = this.radar.getContext('2d');
@@ -144,6 +147,7 @@ export class HUD {
     const lowArmor = p.armor / p.maxArmor < 0.25 && p.alive ? 0.35 + Math.sin(game.time * 6) * 0.15 : 0;
     e.vignette.style.opacity = Math.max(this.dmg, lowArmor).toFixed(2);
 
+    this.updateTargetBar(game);
     this.updateArrow(game, obj);
     this.updateFloaters(dt, game);
     if (this.frame % 3 === 0) this.drawRadar(game, obj);
@@ -184,6 +188,33 @@ export class HUD {
         this.cache.dist = d;
         e.arrowDist.textContent = d + ' м';
       }
+    }
+  }
+
+  // Полоска здоровья над целью автоприцела (пехоте не нужна — она падает с пары пуль).
+  updateTargetBar(game) {
+    const e = this.el;
+    const t = game.player.target;
+    if (!t || !t.alive || t.maxHp <= 10 || game.player.state !== 'fly') {
+      if (this.cache.tbar !== false) {
+        this.cache.tbar = false;
+        e.tbar.style.display = 'none';
+      }
+      return;
+    }
+    const c = t.aimPoint();
+    _v.set(c.x, c.y, c.z).project(game.camera);
+    if (_v.z > 1) return;
+    if (this.cache.tbar !== true) {
+      this.cache.tbar = true;
+      e.tbar.style.display = 'flex';
+    }
+    const x = ((_v.x + 1) / 2) * window.innerWidth, y = ((1 - _v.y) / 2) * window.innerHeight;
+    e.tbar.style.transform = `translate(${x}px, ${y + 28}px)`;
+    e.tfill.style.transform = `scaleX(${Math.max(t.hp, 0) / t.maxHp})`;
+    if (this.cache.tname !== t) {
+      this.cache.tname = t;
+      e.tname.textContent = t.label || '';
     }
   }
 
