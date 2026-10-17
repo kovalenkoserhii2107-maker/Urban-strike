@@ -309,10 +309,14 @@ export class Player {
     this.ammo.gun--;
     const g = this.game;
     const from = this.model.nose.getWorldPosition(new THREE.Vector3());
-    g.projectiles.spawn('gun', 'player', from, this.aimDir(from, 150, 0.025), { mult: this.gunMult });
+    const aim = this.aimDir(from, 150, 0.025);
+    g.projectiles.spawn('gun', 'player', from, aim, { mult: this.gunMult });
     g.fx.muzzle(from.x, from.y, from.z, 0.9);
     g.audio.play('gun');
     g.stats.shots++;
+    if (g.coopMode && g.net?.isConnected) {
+      g.net.send({ type: 'fire', weapon: 'gun', from: [from.x, from.y, from.z], dir: [aim.x, aim.y, aim.z] });
+    }
   }
 
   fireHydra() {
@@ -323,10 +327,14 @@ export class Player {
     const g = this.game;
     const pod = this.pod++ % 2 ? this.model.podL : this.model.podR;
     const from = pod.getWorldPosition(new THREE.Vector3());
-    g.projectiles.spawn('hydra', 'player', from, this.aimDir(from, 75, 0.012), { mult: this.rocketMult });
+    const aimH = this.aimDir(from, 75, 0.012);
+    g.projectiles.spawn('hydra', 'player', from, aimH, { mult: this.rocketMult });
     g.fx.puff(from.x, from.y, from.z, 1.4, true);
     g.audio.play('rocket');
     g.vibrate(12);
+    if (g.coopMode && g.net?.isConnected) {
+      g.net.send({ type: 'fire', weapon: 'hydra', from: [from.x, from.y, from.z], dir: [aimH.x, aimH.y, aimH.z] });
+    }
   }
 
   fireHellfire() {
@@ -341,6 +349,9 @@ export class Player {
     const from = rack[clamp(shown - 1, 0, rack.length - 1)].getWorldPosition(new THREE.Vector3());
     const dir = new THREE.Vector3(Math.sin(this.yaw), -0.25, Math.cos(this.yaw));
     g.projectiles.spawn('hellfire', 'player', from, dir, { mult: this.hfMult, target: this.target });
+    if (g.coopMode && g.net?.isConnected) {
+      g.net.send({ type: 'fire', weapon: 'hellfire', from: [from.x, from.y, from.z], dir: [dir.x, dir.y, dir.z] });
+    }
     // JAGM: вторая ракета уходит по другой цели
     if (this.stats.salvo && this.ammo.hellfire > 0) {
       const second = this.game.enemies.find((e) => e.alive && e.targetable && e !== this.target && e.pos.distanceTo(this.pos) < this.aimRange);
@@ -387,6 +398,9 @@ export class Player {
       }
     }
     g.audio.play('flare');
+    if (g.coopMode && g.net?.isConnected) {
+      g.net.send({ type: 'flare', pos: [this.pos.x, this.pos.y, this.pos.z] });
+    }
     if (fooled) g.hud.toast(`Ракеты уведены ловушками: ${fooled}`, 'good', 1200);
   }
 

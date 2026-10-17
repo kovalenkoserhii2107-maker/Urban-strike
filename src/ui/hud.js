@@ -128,6 +128,26 @@ export class HUD {
     this.set('ag', e.ammoGun, Math.floor(p.ammo.gun), (el, v) => (el.textContent = v));
     this.set('ah', e.ammoHydra, p.ammo.hydra, (el, v) => (el.textContent = v));
     this.set('af', e.ammoHellfire, p.ammo.hellfire, (el, v) => (el.textContent = v));
+
+    const wmEl = this.el.wingman || (this.el.wingman = document.querySelector('#wingman-hud'));
+    if (game.coopMode && game.remotePlayer && wmEl) {
+      wmEl.classList.remove('hidden');
+      const rp = game.remotePlayer;
+      const fill = document.querySelector('#wm-armor-fill');
+      const distEl = document.querySelector('#wm-dist');
+      const pingEl = document.querySelector('#wm-ping');
+      if (fill) fill.style.transform = `scaleX(${Math.max(0, rp.armor / (rp.maxArmor || 100))})`;
+      if (distEl) {
+        const d = Math.round(Math.hypot(rp.pos.x - p.pos.x, rp.pos.z - p.pos.z));
+        distEl.textContent = rp.alive ? `дист: ${d}м` : '💥 СБИТ (НУЖНА ПОМОЩЬ)!';
+        distEl.style.color = rp.alive ? '#a0c0d0' : '#ff4b4b';
+      }
+      if (pingEl && game.net) {
+        pingEl.textContent = `📶 ${game.net.ping || 0}мс`;
+      }
+    } else if (wmEl) {
+      wmEl.classList.add('hidden');
+    }
     this.set('afl', e.ammoFlare, p.flares, (el, v) => (el.textContent = v));
     this.set('pax', e.pax, p.passengers.length + '/' + p.capacity, (el, v) => {
       el.textContent = '👤 ' + v;
@@ -339,6 +359,7 @@ export class HUD {
     for (const op of game.ow?.outposts || []) if (op.owner === 'enemy') square(op.x, op.z, '#ff5a4a', 3.5);
     for (const ev of game.ow?.events || []) dot(ev.x, ev.z, '#ffa040', 3.4, true);
     if (obj.target && Math.sin(game.time * 8) > -0.3) dot(obj.target.x, obj.target.z, obj.color || '#ffe14d', 4.2, true);
+    if (game.remotePlayer && game.remotePlayer.alive) dot(game.remotePlayer.pos.x, game.remotePlayer.pos.z, '#00e5ff', 4.5, true);
     g.restore();
     // игрок
     g.save();

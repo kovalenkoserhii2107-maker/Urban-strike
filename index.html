@@ -27,6 +27,11 @@
           <div class="bar" id="bar-armor"><span class="ico">🛡</span><div class="track"><div class="fill"></div></div></div>
           <div class="bar" id="bar-fuel"><span class="ico">⛽</span><div class="track"><div class="fill"></div></div></div>
           <div id="passengers"></div>
+          <div id="wingman-hud" class="wingman-hud hidden">
+            <div class="wm-title"><span>✈️ НАПАРНИК</span><span id="wm-ping">📶 0мс</span></div>
+            <div class="wm-bar"><div id="wm-armor-fill" class="fill"></div></div>
+            <div class="wm-dist" id="wm-dist">дист: 0м</div>
+          </div>
         </div>
         <div class="hud-center">
           <div id="objective"><span id="obj-text"></span><b id="obj-progress"></b></div>
@@ -122,6 +127,7 @@
         </div>
         <div class="menu-buttons">
           <button class="btn primary big" id="btn-play">В бой</button>
+          <button class="btn accent" id="btn-coop">👥 Совместно (Wi-Fi)</button>
           <button class="btn" id="btn-missions">Сюжет</button>
           <button class="btn" id="btn-hangar">Ангар <span class="pill" id="menu-credits"></span></button>
           <button class="btn" id="btn-settings">Настройки</button>
@@ -130,6 +136,77 @@
       </div>
       <button class="btn primary hidden" id="btn-update">⟳ Доступна новая версия — обновить</button>
       <div class="version" id="version-menu"></div>
+    </section>
+
+    
+    <section id="coop" class="screen">
+      <div class="panel wide coop-panel">
+        <div class="panel-head">
+          <button class="back" data-back="menu">←</button>
+          <h2>Совместная игра (Wi-Fi / LAN)</h2>
+        </div>
+        <div class="coop-body">
+          <p class="coop-desc">
+            Играйте вдвоём на одном острове: прикрывайте друг друга, штурмуйте аванпосты и спасайте сбитого напарника лебёдкой!
+          </p>
+
+          <div class="tabs coop-tabs">
+            <button class="tab on" id="tab-btn-lan">Локальная сеть / Wi-Fi</button>
+            <button class="tab" id="tab-btn-webrtc">Прямое P2P (WebRTC)</button>
+          </div>
+
+          <!-- Вкладка 1: Локальная сеть / WebSocket -->
+          <div id="tab-lan" class="coop-tab-content">
+            <div class="coop-roles">
+              <div class="coop-card host-card active" data-role="host">
+                <div class="card-badge">ХОСТ</div>
+                <h3>Создать вылет</h3>
+                <p>Вы управляете миром и аванпостами. Напарник подключится к вашей игре.</p>
+                <div class="input-group">
+                  <label>Порт сервера:</label>
+                  <input type="text" id="host-port" value="8080" />
+                </div>
+                <div class="host-tip">Запустите <code>node server.js</code> на ПК/ноутбуке в Wi-Fi сети.</div>
+                <button class="btn primary" id="btn-create-host">Создать лобби (Хост)</button>
+              </div>
+
+              <div class="coop-card client-card" data-role="client">
+                <div class="card-badge">КЛИЕНТ</div>
+                <h3>Присоединиться</h3>
+                <p>Подключитесь к ведущему по его IP адресу в этой же сети Wi-Fi.</p>
+                <div class="input-group">
+                  <label>IP адрес хоста:</label>
+                  <input type="text" id="client-ip" placeholder="192.168.1.45:8080" />
+                </div>
+                <button class="btn accent" id="btn-join-client">Подключиться к Хосту</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Вкладка 2: WebRTC P2P -->
+          <div id="tab-webrtc" class="coop-tab-content hidden">
+            <div class="webrtc-box">
+              <p>Прямое соединение без сервера (работает в браузере через обмен кодом комнаты):</p>
+              <div class="row">
+                <button class="btn" id="btn-p2p-offer">1. Создать код комнаты (Хост)</button>
+                <button class="btn" id="btn-p2p-answer">2. Вставить код и ответить (Клиент)</button>
+              </div>
+              <textarea id="p2p-code" rows="3" placeholder="Здесь появится код подключения или вставьте код от напарника..."></textarea>
+              <div class="row">
+                <button class="btn primary" id="btn-p2p-apply">Применить код</button>
+                <button class="btn ghost" id="btn-p2p-copy">Копировать</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Статус подключения и запуск -->
+          <div class="coop-status-bar">
+            <div id="coop-status-badge" class="badge idle">Статус: Не подключено</div>
+            <div id="coop-partner-info" class="partner-info hidden">Напарник: <b>Ведомый</b> (готов к вылету)</div>
+            <button class="btn primary big" id="btn-launch-coop" disabled>Взлёт вдвоём 🚁🚁</button>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section id="missions" class="screen">
