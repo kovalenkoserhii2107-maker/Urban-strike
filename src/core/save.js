@@ -8,6 +8,7 @@ const DEFAULTS = {
   upgrades: { armor: 0, fuel: 0, gun: 0, rockets: 0 },
   settings: { quality: 'auto', camera: 'normal', sound: true, music: true, vibration: true },
   tutorialDone: false,
+  skin: 'marines',
 };
 
 function load() {

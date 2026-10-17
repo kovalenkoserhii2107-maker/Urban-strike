@@ -239,6 +239,7 @@ export class HUD {
     const c = this.radar;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const size = c.clientWidth;
+    if (size < 20) return;
     if (c.width !== Math.round(size * dpr)) {
       c.width = c.height = Math.round(size * dpr);
     }

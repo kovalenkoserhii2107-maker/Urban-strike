@@ -1,4 +1,5 @@
 import { Game, MISSIONS } from './game/game.js';
+import { SKINS } from './game/viper.js';
 import { save, persist } from './core/save.js';
 import { isStandalone, isIOS, canPrompt, promptInstall, onInstallChange, registerSW, goFullscreen } from './pwa.js';
 
@@ -176,6 +177,23 @@ const COST = [400, 900, 1600];
 
 function renderHangar() {
   $('#hangar-credits').textContent = save.credits.toLocaleString('ru-RU');
+  const skins = $('#skin-list');
+  skins.innerHTML = '';
+  for (const [id, sk] of Object.entries(SKINS)) {
+    const b = document.createElement('button');
+    b.className = 'skin' + (save.skin === id ? ' on' : '');
+    const hex = (n) => '#' + n.toString(16).padStart(6, '0');
+    b.innerHTML = `<i style="background: linear-gradient(135deg, ${hex(sk.body)} 55%, ${hex(sk.dark)} 55%)"></i>${sk.name}`;
+    b.addEventListener('click', () => {
+      click();
+      save.skin = id;
+      persist();
+      renderHangar();
+      // в меню вертолёт сразу перекрашивается
+      if (game.mode === 'attract') game.startAttract();
+    });
+    skins.appendChild(b);
+  }
   const list = $('#upgrade-list');
   list.innerHTML = '';
   for (const u of UPGRADES) {
