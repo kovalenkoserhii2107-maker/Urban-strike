@@ -15,6 +15,7 @@ import { Audio } from './audio.js';
 import { HUD } from '../ui/hud.js';
 import { createPerson } from './models.js';
 import { clamp, damp } from '../core/utils.js';
+import { persist } from '../core/save.js';
 
 export const QUALITY = {
   low: { dpr: 1, shadow: 1024, bloom: false, density: 0.55, fx: 0.6 },
@@ -22,6 +23,7 @@ export const QUALITY = {
   high: { dpr: 2, shadow: 2048, bloom: true, density: 1, fx: 1 },
 };
 const ORDER = ['low', 'medium', 'high'];
+const CAM_ZOOM = { near: 0.82, normal: 1, far: 1.25 };
 const _look = new THREE.Vector3();
 
 const isCoarse = () => matchMedia('(pointer: coarse)').matches;
@@ -171,6 +173,24 @@ export class Game {
     this.audio.unlock();
     this.audio.startRotor();
     if (this.save.settings.music) this.audio.startMusic('action');
+    if (index === 0 && !this.save.tutorialDone) this.tutorial();
+  }
+
+  // Короткое обучение в первой миссии: подсказки по очереди, один раз.
+  tutorial() {
+    const touch = isCoarse();
+    const steps = [
+      [4, touch ? 'Веди пальцем по левой половине экрана — вертолёт полетит туда' : 'WASD или стрелки — полёт'],
+      [10, 'Держи «Пулемёт» или «Ракеты» — прицел сам наводится на ближайшую цель'],
+      [17, 'Жёлтая стрелка и мигающая точка на радаре ведут к цели задания'],
+      [24, 'Зависни над ящиком или человеком — лебёдка поднимет его на борт'],
+      [31, 'На базе (площадка «H») вертолёт дозаправляется и высаживает спасённых'],
+    ];
+    for (const [t, text] of steps) this.after(t, () => this.mode === 'play' && this.hud.toast(text, 'info', 5000));
+    this.after(33, () => {
+      this.save.tutorialDone = true;
+      persist();
+    });
   }
 
   pause(on) {
@@ -419,18 +439,18 @@ export class Game {
     let yaw = CAM_YAW, dist = 1, height = 1;
     if (this.mode === 'attract') {
       yaw = CAM_YAW + this.attractT * 0.12;
-      dist = 0.62;
-      height = 0.55;
+      dist = 0.8;
+      height = 0.71;
     } else if (this.cineT !== undefined && this.cineT < 3) {
       const k = clamp(this.cineT / 3, 0, 1);
       const e = 1 - Math.pow(1 - k, 3);
       yaw = CAM_YAW + (1 - e) * 1.4;
-      dist = 0.35 + 0.65 * e;
-      height = 0.3 + 0.7 * e;
+      dist = 0.45 + 0.55 * e;
+      height = 0.39 + 0.61 * e;
     } else if (this.mode === 'outro') {
       yaw = CAM_YAW + this.outroT * 0.25;
-      dist = 0.75;
-      height = 0.7;
+      dist = 0.96;
+      height = 0.9;
     }
     const lx = p.pos.x + p.vel.x * 0.5, lz = p.pos.z + p.vel.z * 0.5;
     const ly = this.mode === 'play' && this.cineT >= 3 ? p.pos.y * 0.45 : p.pos.y * 0.75;
@@ -440,7 +460,8 @@ export class Game {
       this.camLook.y = damp(this.camLook.y, ly, 4, dt);
       this.camLook.z = damp(this.camLook.z, lz, 4, dt);
     }
-    const B = 46 * fit * dist, H = 62 * fit * height;
+    const zoom = this.mode === 'attract' ? 1 : CAM_ZOOM[this.save.settings.camera] ?? 1;
+    const B = 36 * fit * dist * zoom, H = 48 * fit * height * zoom;
     cam.position.set(this.camLook.x + Math.sin(yaw) * B, this.camLook.y + H, this.camLook.z + Math.cos(yaw) * B);
     if (this.shakeAmt > 0.01) {
       const s = this.shakeAmt * 0.9;

@@ -234,7 +234,7 @@ export class Rescuee {
 
 export class Jeep extends Enemy {
   constructor(game, x, z, { patrol = true } = {}) {
-    super(game, 'jeep', x, z, { hp: 34, radius: 2.8, centerY: 1.3, score: 150 });
+    super(game, 'jeep', x, z, { hp: 34, radius: 2.8, centerY: 1.3, score: 150, label: 'Джип' });
     this.model = M.createJeep();
     this.mover = patrol ? new RoadMover(game.world, x, z, rnd(9, 12)) : null;
     this.attach(this.model.group);
@@ -287,7 +287,7 @@ export class Truck extends Enemy {
 
 export class Tank extends Enemy {
   constructor(game, x, z, { patrol = false } = {}) {
-    super(game, 'tank', x, z, { hp: 140, radius: 3.6, centerY: 1.8, score: 350 });
+    super(game, 'tank', x, z, { hp: 140, radius: 3.6, centerY: 1.8, score: 350, label: 'Танк' });
     this.model = M.createTank();
     this.mover = patrol ? new RoadMover(game.world, x, z, 4.5) : null;
     this.attach(this.model.group);
