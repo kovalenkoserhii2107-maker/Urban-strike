@@ -239,7 +239,7 @@ export class World {
     });
     mat.uniforms.uNormal.value = T.waterNormal();
     mat.uniforms.uDepth.value = this.terrain.depthTexture();
-    const geo = new THREE.PlaneGeometry(4200, 4200, 80, 80).rotateX(-Math.PI / 2);
+    const geo = new THREE.PlaneGeometry(6000, 6000, 90, 90).rotateX(-Math.PI / 2);
     const water = new THREE.Mesh(geo, mat);
     water.position.y = WORLD.waterY;
     this.scene.add(water);
@@ -467,6 +467,7 @@ export class World {
     const nodes = this.graph.nodes.filter((n) => n.region === region);
     for (let t = 0; t < 40; t++) {
       const a = rng.pick(nodes);
+      if (!a?.nbrs.length) continue;
       const b = rng.pick(a.nbrs);
       const k = rng.float(0.15, 0.85);
       const x = a.x + (b.x - a.x) * k + rng.float(-4, 4), z = a.z + (b.z - a.z) * k + rng.float(-4, 4);

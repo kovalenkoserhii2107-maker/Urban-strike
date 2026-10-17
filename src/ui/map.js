@@ -47,7 +47,8 @@ function renderBase(world) {
   const X = (x) => ((x + WORLD.half) / (WORLD.half * 2)) * N;
   // районы
   g.fillStyle = 'rgba(150,150,150,0.45)';
-  for (const z of [LAYOUT.city, LAYOUT.industrial, LAYOUT.airbase, LAYOUT.fob]) g.fillRect(X(z.x - z.hx), X(z.z - z.hz), (z.hx * 2 * N) / (WORLD.half * 2), (z.hz * 2 * N) / (WORLD.half * 2));
+  const allDistricts = [LAYOUT.city, LAYOUT.industrial, LAYOUT.airbase, LAYOUT.fob, LAYOUT.refinery, LAYOUT.radar, LAYOUT.dam, LAYOUT.resort, LAYOUT.bunker];
+  for (const z of allDistricts) g.fillRect(X(z.x - z.hx), X(z.z - z.hz), (z.hx * 2 * N) / (WORLD.half * 2), (z.hz * 2 * N) / (WORLD.half * 2));
   // здания
   g.fillStyle = 'rgba(55,55,60,0.85)';
   for (const b of world.buildings) g.fillRect(X(b.x - b.w / 2), X(b.z - b.d / 2), Math.max(1, (b.w * N) / (WORLD.half * 2)), Math.max(1, (b.d * N) / (WORLD.half * 2)));
@@ -150,7 +151,11 @@ export class MapScreen {
     // подписи районов
     g.font = '700 12px system-ui, sans-serif';
     g.textAlign = 'center';
-    const regions = [LAYOUT.city, LAYOUT.industrial, LAYOUT.airbase, LAYOUT.mountains, ...LAYOUT.villages];
+    const regions = [
+      LAYOUT.city, LAYOUT.industrial, LAYOUT.airbase, LAYOUT.mountains,
+      LAYOUT.refinery, LAYOUT.radar, LAYOUT.dam, LAYOUT.resort, LAYOUT.bunker,
+      ...LAYOUT.villages
+    ];
     for (const r of regions) {
       if (ow && !ow.explored(r.x, r.z)) continue;
       const [sx, sy] = this.toScreen(r.x, r.z, L);

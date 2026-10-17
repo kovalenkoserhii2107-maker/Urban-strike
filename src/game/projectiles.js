@@ -66,6 +66,7 @@ export class Projectiles {
       dmg: (opts.dmg ?? def.dmg) * (opts.mult ?? 1),
       splash: def.splash,
       target: opts.target || null,
+      remote: !!opts.remote,
       trailAcc: 0,
       alive: true,
     };
@@ -92,7 +93,7 @@ export class Projectiles {
     } else {
       g.fx.spark(x, y, z, 2);
     }
-    if (d.splash > 0) g.applySplash(x, y, z, d.splash, p.dmg, p.team);
+    if (d.splash > 0) g.applySplash(x, y, z, d.splash, p.dmg, p.team, p.remote);
   }
 
   update(dt) {
@@ -140,7 +141,7 @@ export class Projectiles {
           if (Math.abs(c.x - p.pos.x) > 14 || Math.abs(c.z - p.pos.z) > 14) continue;
           if (segmentPointDist(p.prev.x, p.prev.y, p.prev.z, p.pos.x, p.pos.y, p.pos.z, c.x, c.y, c.z) < e.radius + 0.4) {
             if (d.splash === 0) {
-              e.hit(p.dmg, 'gun');
+              e.hit(p.dmg, p.remote ? 'remote' : 'gun');
               g.fx.spark(p.pos.x, p.pos.y, p.pos.z, 3);
               g.stats.hits++;
             }
@@ -220,7 +221,8 @@ export class Projectiles {
   // Ракеты ЗРК, которые сейчас ведут игрока (для предупреждения на HUD).
   incomingMissiles() {
     let n = 0;
-    for (const p of this.list) if (p.def.sam && (p.target === this.game.player || p.target === this.game.remotePlayer)) n++;
+    // предупреждаем только о ракетах, летящих в нас: за свои следит напарник
+    for (const p of this.list) if (p.def.sam && p.target === this.game.player) n++;
     return n;
   }
 

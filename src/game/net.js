@@ -483,6 +483,15 @@ export class NetworkManager {
       case 'pilot_down':
         this.emit('remote_pilot_down', msg);
         break;
+      case 'story':
+        this.emit('story', msg);
+        break;
+      case 'picked':
+        this.emit('picked', msg);
+        break;
+      case 'rescued':
+        this.emit('rescued', msg);
+        break;
       case 'toast':
         this.emit('chat_toast', msg.text);
         break;

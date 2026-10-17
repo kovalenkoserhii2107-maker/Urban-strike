@@ -7,22 +7,29 @@ import { STORY } from './missions.js';
 import { missingRequirements, moduleLevel } from './modules.js';
 import { persist } from '../core/save.js';
 
-const FOG_N = 64;
+const FOG_N = 96;
 
 // Состояние открытого мира: аванпосты, фоновые враги, события, туман войны.
 export class OpenWorld {
   constructor(game) {
     this.game = game;
     this.save = game.save;
+    // события у каждого игрока свои, а расстановка врагов — одинаковая
+    // у обоих участников совместной игры (фиксированное зерно)
     this.rng = new Rng(Date.now() & 0xffff);
     this.save.world ||= { outposts: {}, fog: '' };
+    // сетка тумана могла поменяться с прошлой версии — тогда начинаем с чистой
+    if (this.save.world.fogN !== FOG_N) {
+      this.save.world.fog = '';
+      this.save.world.fogN = FOG_N;
+    }
     this.fog = decodeFog(this.save.world.fog);
     this.outposts = [];
     this.events = [];
     this.eventT = 50;
     this.zoneT = 0;
     this.fogT = 0;
-    this.spawnAmbient();
+    game.withTag('amb', () => this.spawnAmbient(new Rng(20240617)));
     this.setupOutposts();
   }
 
@@ -37,10 +44,12 @@ export class OpenWorld {
       if (owner === 'enemy') {
         const list = ['soldier', 'soldier', 'rpg', 'soldier', i % 3 === 0 ? 'sam' : 'aa'];
         if (i % 2) list.push('jeep');
-        op.defenders = list.map((t, k) => {
-          const a = (k / list.length) * Math.PI * 2;
-          return spawnEnemy(g, t, o.x + Math.cos(a) * 11, o.z + Math.sin(a) * 11, { patrol: false });
-        });
+        op.defenders = g.withTag('op-' + o.id, () =>
+          list.map((t, k) => {
+            const a = (k / list.length) * Math.PI * 2;
+            return spawnEnemy(g, t, o.x + Math.cos(a) * 11, o.z + Math.sin(a) * 11, { patrol: false });
+          })
+        );
         for (const d of op.defenders) d.outpost = op;
       }
     });
@@ -64,8 +73,8 @@ export class OpenWorld {
   }
 
   // ---------- фоновые враги по регионам ----------
-  spawnAmbient() {
-    const g = this.game, rng = this.rng, w = g.world;
+  spawnAmbient(rng) {
+    const g = this.game, w = g.world;
     const put = (type, region, n, opts = {}) => {
       for (let i = 0; i < n; i++) {
         const p = w.randomStreetPoint(rng, region, 90);
@@ -84,13 +93,34 @@ export class OpenWorld {
     put('aa', 'airbase', 3);
     put('tank', 'airbase', 2, { patrol: true });
     put('sam', 'airbase', 2);
-    for (const v of LAYOUT.villages.slice(0, 2)) {
+
+    put('soldier', 'refinery', 8);
+    put('jeep', 'refinery', 2, { patrol: true });
+    put('aa', 'refinery', 2);
+    put('tank', 'refinery', 1, { patrol: true });
+
+    put('soldier', 'radar', 8);
+    put('sam', 'radar', 2);
+    put('aa', 'radar', 2);
+
+    put('soldier', 'dam', 6);
+    put('rpg', 'dam', 3);
+    put('aa', 'dam', 2);
+
+    put('soldier', 'resort', 6);
+    put('jeep', 'resort', 2, { patrol: true });
+
+    put('soldier', 'bunker', 10);
+    put('tank', 'bunker', 1);
+    put('sam', 'bunker', 2);
+
+    for (const v of LAYOUT.villages) {
       for (let i = 0; i < 3; i++) spawnEnemy(g, 'soldier', v.x + rng.float(-25, 25), v.z + rng.float(-25, 25));
     }
     for (const p of w.sites.mountains.slice(3)) spawnEnemy(g, 'aa', p.x + 6, p.z - 6);
     // припасы вдоль дорог и у аванпостов
-    for (let i = 0; i < 26; i++) {
-      const region = rng.pick(['city', 'city', 'industrial', 'airbase', null]);
+    for (let i = 0; i < 48; i++) {
+      const region = rng.pick(['city', 'industrial', 'airbase', 'refinery', 'radar', 'dam', 'resort', 'bunker', null]);
       let p;
       if (region) p = w.randomStreetPoint(rng, region, 40);
       else {
@@ -101,7 +131,7 @@ export class OpenWorld {
       g.addPickup(rng.pick(['fuel', 'fuel', 'ammo', 'armor']), p.x, p.z);
     }
     const blds = w.buildings.filter((b) => !b.indestructible);
-    for (let i = 0; i < 40 && blds.length; i++) blds.splice(rng.int(0, blds.length - 1), 1)[0].crate = rng.pick(['fuel', 'ammo', 'armor']);
+    for (let i = 0; i < 65 && blds.length; i++) blds.splice(rng.int(0, blds.length - 1), 1)[0].crate = rng.pick(['fuel', 'ammo', 'armor']);
   }
 
   // ---------- сюжет ----------
@@ -109,9 +139,14 @@ export class OpenWorld {
     return STORY[this.save.chapter] || null;
   }
 
+  // ведомый в паре задания не выбирает: их запускает ведущий
+  get isWingman() {
+    return this.game.coopMode && this.game.net?.isClient;
+  }
+
   storyMarker() {
     const def = this.storyDef();
-    if (!def || this.game.mission) return null;
+    if (!def || this.game.mission || this.isWingman) return null;
     return { ...def.marker, y: this.game.world.heightAt(def.marker.x, def.marker.z) + 6, def };
   }
 
@@ -121,7 +156,7 @@ export class OpenWorld {
     const type = rng.pick(['pilot', 'convoy', 'supply']);
     let pos = null;
     for (let t = 0; t < 30 && !pos; t++) {
-      const x = rng.float(-650, 650), z = rng.float(-650, 650);
+      const x = rng.float(-WORLD.half + 300, WORLD.half - 300), z = rng.float(-WORLD.half + 300, WORLD.half - 300);
       const h = w.heightAt(x, z);
       if (h < 1 || h > 70 || w.terrain.slope(x, z) > 0.5) continue;
       if (dist2D(x, z, g.player.pos.x, g.player.pos.z) < 200) continue;
@@ -168,7 +203,7 @@ export class OpenWorld {
     }
     // события
     this.eventT -= dt;
-    if (this.eventT <= 0) {
+    if (this.eventT <= 0 && !this.isWingman) {
       this.eventT = this.rng.float(120, 200);
       if (this.events.length < 3) this.spawnEvent();
     }

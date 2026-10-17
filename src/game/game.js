@@ -27,6 +27,8 @@ export const QUALITY = {
   high: { dpr: 2, shadow: 2048, post: true, ao: true, density: 1, fx: 1 },
 };
 const ORDER = ['low', 'medium', 'high'];
+// враги, чьё положение ведущий передаёт ведомому
+const MOVING = new Set(['soldier', 'rpg', 'jeep', 'truck', 'tank', 'heli', 'boss']);
 const CAM_ZOOM = { near: 0.82, normal: 1, far: 1.25 };
 const _look = new THREE.Vector3();
 
@@ -227,9 +229,14 @@ export class Game {
 
   // ---------- сюжетные задания ----------
   startStory(def) {
+    if (this.mission || this.storyPending) return;
+    this.storyPending = true;
+    // в паре задание запускает ведущий, у ведомого оно стартует следом
+    if (this.coopMode && this.net.isHost) this.net.send({ type: 'story', id: def.id });
     this.hooks.transition(() => {
       if (this.world.lightingName !== def.lighting) this.world.setLighting(def.lighting);
-      this.mission = new MissionRunner(this, def);
+      this.storyPending = false;
+      this.mission = this.withTag('story-' + def.id, () => new MissionRunner(this, def));
       this.missionDeaths = 0;
       this.missionStats = { ...this.stats };
       this.missionStart = this.time;
@@ -318,11 +325,28 @@ export class Game {
   }
 
   // ---------- игровые события ----------
+  // Номер врага — «группа:порядковый номер в группе». Группы (фон, каждый
+  // аванпост, каждое задание) расставляются одинаково у обоих игроков,
+  // поэтому номер не зависит от того, что ещё успело появиться на устройстве.
+  // Всё, что появляется само по ходу игры (события, подкрепления), — группа «local».
+  nextId(prefix = 'e') {
+    const tag = this.spawnTag || 'local';
+    this.tagCounts ||= {};
+    const key = prefix + tag;
+    this.tagCounts[key] = (this.tagCounts[key] || 0) + 1;
+    return `${tag}:${prefix}${this.tagCounts[key]}`;
+  }
+  withTag(tag, fn) {
+    const prev = this.spawnTag;
+    this.spawnTag = tag;
+    try {
+      return fn();
+    } finally {
+      this.spawnTag = prev;
+    }
+  }
   addEnemy(e) {
-    // Номер по порядку появления: мир строится одинаково у обоих
-    // игроков, и по номеру ведомый находит «того же» врага, даже когда
-    // списки чистятся от убитых в разное время.
-    e.nid = this.enemySeq = (this.enemySeq || 0) + 1;
+    e.nid = this.nextId('e');
     this.enemies.push(e);
     return e;
   }
@@ -333,6 +357,7 @@ export class Game {
   }
   addRescuee(x, z, kind = 'hostage') {
     const r = new Rescuee(this, x, z, kind);
+    r.rid = this.nextId('r');
     this.winchables.push(r);
     return r;
   }
@@ -367,17 +392,17 @@ export class Game {
     this.addCredits(v / 5, pos, cls);
   }
 
-  applySplash(x, y, z, r, dmg, team) {
+  applySplash(x, y, z, r, dmg, team, remote = false) {
     if (team === 'player') {
       for (const e of this.enemies) {
         if (!e.alive) continue;
         const c = e.aimPoint();
         const d = Math.hypot(c.x - x, c.z - z);
-        if (d < r + e.radius && Math.abs(c.y - y) < r + e.radius + 2) e.hit(dmg * (1 - 0.5 * clamp(d / (r + e.radius), 0, 1)));
+        if (d < r + e.radius && Math.abs(c.y - y) < r + e.radius + 2) e.hit(dmg * (1 - 0.5 * clamp(d / (r + e.radius), 0, 1)), remote ? 'remote' : 'splash');
       }
       for (const b of this.world.buildingsNear(x, z, r)) {
         const dx = Math.max(Math.abs(x - b.x) - b.w / 2, 0), dz = Math.max(Math.abs(z - b.z) - b.d / 2, 0);
-        if (Math.hypot(dx, dz) < r && y < b.y + b.top + 2) this.damageBuilding(b, dmg * 0.55);
+        if (Math.hypot(dx, dz) < r && y < b.y + b.top + 2) this.damageBuilding(b, dmg * 0.55, remote);
       }
     } else if (this.player.alive) {
       const p = this.player.pos;
@@ -387,7 +412,7 @@ export class Game {
     if (y < this.fx.ground(x, z) + 7) this.world.blast(x, z, r * 0.7);
   }
 
-  damageBuilding(b, dmg) {
+  damageBuilding(b, dmg, remote = false) {
     if (!this.world.damageBuilding(b, dmg)) return;
     this.stats.buildings++;
     this.audio.play('boomBig', b.x, b.z);
@@ -404,7 +429,7 @@ export class Game {
     }
     this.fx.debrisBurst(b.x, b.y + b.h * 0.6, b.z, Math.round(16 * this.q.fx), b.wallColor, 2);
     this.world.blast(b.x, b.z, Math.max(b.w, b.d) * 0.6);
-    this.addCredits(12, new THREE.Vector3(b.x, b.y + b.h, b.z));
+    if (!remote) this.addCredits(12, new THREE.Vector3(b.x, b.y + b.h, b.z));
     if (b.crate) {
       const type = b.crate;
       b.crate = null;
@@ -451,7 +476,8 @@ export class Game {
     if (this.time - this.lastKill < 3.2) this.combo = Math.min(this.combo + 1, 5);
     else this.combo = 1;
     this.lastKill = this.time;
-    this.addCredits((e.score / 5) * this.combo + (e.bounty || 0), e.aimPoint().clone(), e.tag ? 'big' : '');
+    // за врага, сбитого ракетой напарника, платят напарнику — на его устройстве
+    if (e.lastHit !== 'remote') this.addCredits((e.score / 5) * this.combo + (e.bounty || 0), e.aimPoint().clone(), e.tag ? 'big' : '');
     if (!e.tag && e.radius > 2.5 && Math.random() < 0.2) {
       const type = ['fuel', 'ammo', 'armor'][Math.floor(Math.random() * 3)];
       this.after(0.6, () => this.addPickup(type, e.pos.x + 3, e.pos.z));
@@ -485,6 +511,7 @@ export class Game {
   onRescued(p) {
     this.stats.rescued++;
     if (p.objective) p.objective.delivered++;
+    if (this.coopMode && this.net.isConnected && p.rid) this.net.send({ type: 'rescued', rid: p.rid });
     this.addCredits(100 + (p.bounty || 0), this.player.pos.clone(), 'big');
     this.audio.play('rescue');
     this.hud.toast(p.kind === 'pilot' ? 'Пилот спасён!' : 'Человек спасён!', 'good', 1300);
@@ -748,6 +775,26 @@ export class Game {
       if (!this.coopMode || !Array.isArray(msg.pos)) return;
       this.spawnDownedPilot(new THREE.Vector3(msg.pos[0], msg.pos[1], msg.pos[2]), 'напарника');
     });
+    // задание начал ведущий — запускаем то же самое
+    net.on('story', (msg) => {
+      if (!this.coopMode || this.mission) return;
+      const def = STORY.find((d) => d.id === msg.id);
+      if (def) this.startStory(def);
+    });
+    // напарник поднял лебёдкой человека: у нас он исчезает
+    net.on('picked', (msg) => {
+      const r = this.winchables.find((w) => w.rid === msg.rid);
+      if (!r || !r.alive) return;
+      // список лебёдки чистится от убранных — запомним для доставки
+      (this.pickedByPartner ||= new Map()).set(r.rid, r);
+      r.alive = false;
+      this.scene.remove(r.obj);
+    });
+    // напарник доставил человека на базу: засчитываем задачу и у нас
+    net.on('rescued', (msg) => {
+      const r = this.winchables.find((w) => w.rid === msg.rid) || this.pickedByPartner?.get(msg.rid);
+      if (r?.objective) r.objective.delivered++;
+    });
     net.on('link_lost', () => {
       if (this.coopMode) this.hud.toast('Связь с напарником прервалась — восстанавливаем…', 'warn', 3000);
     });
@@ -807,12 +854,6 @@ export class Game {
   sendWorldSnapshot() {
     if (!this.net.isConnected) return;
     const p = this.player;
-    const enemiesData = [];
-    for (const e of this.enemies) {
-      if (e.alive && e.nid) {
-        enemiesData.push([e.nid, e.kind, Math.round(e.hp), Math.round(e.pos.x * 10) / 10, Math.round(e.pos.z * 10) / 10, e.yaw ? Math.round(e.yaw * 100) / 100 : 0]);
-      }
-    }
     const snap = {
       type: 'snapshot',
       seq: ++this.net.seq,
@@ -826,9 +867,23 @@ export class Game {
         alive: p.alive,
         winch: p.winch ? { len: Math.round(p.winch.len * 10) / 10 } : null,
       },
-      enemies: enemiesData,
-      maxNid: this.enemySeq || 0,
     };
+    // Список врагов — каждый третий снимок (~7 раз в секунду): его хватает
+    // для здоровья и гибели, а трафик втрое меньше.
+    if (this.net.seq % 3 === 0) {
+      const enemies = [];
+      for (const e of this.enemies) {
+        if (!e.alive || !e.nid || e.nid.startsWith('local:')) continue;
+        enemies.push([e.nid, e.kind, Math.round(e.hp), Math.round(e.pos.x * 10) / 10, Math.round(e.pos.z * 10) / 10]);
+      }
+      snap.enemies = enemies;
+      // группы, которые у ведущего уже расставлены: врагов из других групп
+      // ведомый не трогает (например, задание у него ещё не успело начаться)
+      const groups = new Set((this.ow?.outposts || []).map((o) => 'op-' + o.id));
+      for (const key of Object.keys(this.tagCounts || {})) if (key.startsWith('e')) groups.add(key.slice(1));
+      groups.delete('local');
+      snap.groups = [...groups];
+    }
     this.net.sendFast(snap);
   }
 
@@ -864,19 +919,27 @@ export class Game {
       if (!e || e.kind !== kind) continue;
       seen.add(nid);
       if (!e.alive) continue;
-      e.hp = hp;
-      if (e.kind === 'jeep' || e.kind === 'truck' || e.kind === 'soldier') {
-        e.pos.x = x;
-        e.pos.z = z;
-        if (e.obj) e.obj.position.set(x, e.pos.y, z);
+      e.hp = Math.min(e.hp, hp);
+      if (MOVING.has(e.kind)) {
+        // движущихся подтягиваем плавно, а при большом расхождении — сразу
+        const far = Math.hypot(e.pos.x - x, e.pos.z - z) > 25;
+        e.pos.x = far ? x : e.pos.x + (x - e.pos.x) * 0.5;
+        e.pos.z = far ? z : e.pos.z + (z - e.pos.z) * 0.5;
+        if (e.kind !== 'heli' && e.kind !== 'boss') e.pos.y = this.world.heightAt(e.pos.x, e.pos.z);
+        if (e.obj && e.kind !== 'boss') {
+          e.obj.position.x = e.pos.x;
+          e.obj.position.z = e.pos.z;
+        }
       }
     }
+    const groups = new Set(snap.groups || []);
     for (const e of this.enemies) {
-      if (e.alive && e.nid && e.nid <= snap.maxNid && !seen.has(e.nid)) {
-        e.alive = false;
-        e.hp = 0;
-        e.die();
-      }
+      if (!e.alive || !e.nid || seen.has(e.nid)) continue;
+      const group = e.nid.slice(0, e.nid.indexOf(':'));
+      if (group === 'local' || !groups.has(group)) continue;
+      e.alive = false;
+      e.hp = 0;
+      e.die();
     }
   }
 
@@ -885,15 +948,15 @@ export class Game {
     const from = new THREE.Vector3(msg.from[0], msg.from[1], msg.from[2]);
     const dir = new THREE.Vector3(msg.dir[0], msg.dir[1], msg.dir[2]);
     if (msg.weapon === 'gun') {
-      this.projectiles.spawn('gun', 'player', from, dir, { mult: 1.0 });
+      this.projectiles.spawn('gun', 'player', from, dir, { mult: 1.0, remote: true });
       this.fx.muzzle(from.x, from.y, from.z, 0.9);
       this.audio.play('gun', from.x, from.z);
     } else if (msg.weapon === 'hydra') {
-      this.projectiles.spawn('hydra', 'player', from, dir, { mult: 1.0 });
+      this.projectiles.spawn('hydra', 'player', from, dir, { mult: 1.0, remote: true });
       this.fx.puff(from.x, from.y, from.z, 1.4, true);
       this.audio.play('rocket', from.x, from.z);
     } else if (msg.weapon === 'hellfire') {
-      this.projectiles.spawn('hellfire', 'player', from, dir, { mult: 1.0 });
+      this.projectiles.spawn('hellfire', 'player', from, dir, { mult: 1.0, remote: true });
       this.fx.puff(from.x, from.y, from.z, 2, true);
       this.audio.play('hellfire', from.x, from.z);
     }
