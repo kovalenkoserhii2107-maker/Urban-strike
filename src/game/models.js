@@ -1,5 +1,7 @@
 import * as THREE from 'three';
-import { toon, glow, gradientMap, G } from './materials.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { toon, glow, G } from './materials.js';
+import { colored } from './props.js';
 
 // Все модели собраны из примитивов: мультяшный low-poly стиль, без внешних ассетов.
 // Передняя часть каждой модели смотрит в +Z.
@@ -87,44 +89,54 @@ export function createHeli(scheme = 'player') {
   return { group: g, rotor, tailRotor, disc, beacon, nose, podL, podR };
 }
 
+// Человек: туловище, голова и снаряжение слиты в один меш (меньше вызовов отрисовки),
+// руки отдельно — ими машут заложники.
 export function createPerson(kind = 'rifle') {
   const g = new THREE.Group();
   const colors = {
-    rifle: { body: 0xb8935a, legs: 0x5b4a33, hat: 0x7d6a46 },
-    rpg: { body: 0xa77f4a, legs: 0x4e3f2c, hat: 0xd8463c },
-    hostage: { body: 0xf3efe6, legs: 0x3b5b8f, hat: null },
-    pilot: { body: 0xff8a1f, legs: 0xe06d0b, hat: 0xf2f2f2 },
-    civilian: { body: 0x4fa3e0, legs: 0x334155, hat: null },
+    rifle: { body: 0x7a6a46, legs: 0x4b4232, hat: 0x5b5a3e },
+    rpg: { body: 0x6f6040, legs: 0x463d2c, hat: 0x8a3a30 },
+    hostage: { body: 0xe9e4d8, legs: 0x3b5b8f, hat: null },
+    pilot: { body: 0xd8762a, legs: 0xb8601e, hat: 0xe8e8e8 },
+    civilian: { body: 0x4f86b8, legs: 0x334155, hat: null },
   }[kind];
   const inner = new THREE.Group();
   g.add(inner);
-  add(inner, G.cyl(0.42, 0.5, 1.3, 8), toon(colors.body), 0, 1.05, 0);
-  add(inner, G.sphere(0.38, 10, 8), toon(0xf2c29b), 0, 2.0, 0);
-  if (colors.hat) {
-    add(inner, G.custom('helmet', () => new THREE.SphereGeometry(0.43, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2)), toon(colors.hat), 0, 2.08, 0);
-  } else {
-    add(inner, G.custom('hair', () => new THREE.SphereGeometry(0.4, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2.4)), toon(0x5a3a22), 0, 2.08, -0.03);
-  }
-  add(inner, G.box(0.28, 0.7, 0.3), toon(colors.legs), -0.2, 0.35, 0);
-  add(inner, G.box(0.28, 0.7, 0.3), toon(colors.legs), 0.2, 0.35, 0);
+  const geo = G.custom('person-' + kind, () => {
+    const parts = [];
+    const put = (geom, color, x, y, z, rx = 0) => {
+      const c = geom.clone();
+      if (rx) c.rotateX(rx);
+      c.translate(x, y, z);
+      parts.push(colored(c, color));
+    };
+    put(new THREE.CylinderGeometry(0.42, 0.5, 1.3, 8), colors.body, 0, 1.05, 0);
+    put(new THREE.SphereGeometry(0.38, 10, 8), 0xe0b08a, 0, 2.0, 0);
+    if (colors.hat) put(new THREE.SphereGeometry(0.43, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), colors.hat, 0, 2.08, 0);
+    else put(new THREE.SphereGeometry(0.4, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2.4), 0x4a3020, 0, 2.08, -0.03);
+    put(new THREE.BoxGeometry(0.28, 0.7, 0.3), colors.legs, -0.2, 0.35, 0);
+    put(new THREE.BoxGeometry(0.28, 0.7, 0.3), colors.legs, 0.2, 0.35, 0);
+    if (kind === 'rifle') put(new THREE.BoxGeometry(0.12, 0.14, 1.2), 0x1e1e1e, 0.3, 1.25, 0.5);
+    if (kind === 'rpg') {
+      put(new THREE.CylinderGeometry(0.16, 0.16, 1.8, 8), 0x3d4a2a, 0.45, 2.05, 0.1, Math.PI / 2);
+      put(new THREE.ConeGeometry(0.24, 0.5, 8), ENEMY.accent, 0.45, 2.05, 1.1, Math.PI / 2);
+    }
+    return mergeGeometries(parts);
+  });
+  const mat = toon(0xffffff, { vertexColors: true, roughness: 0.85 });
+  inner.add(new THREE.Mesh(geo, mat));
   const arms = [];
-  for (const s of [-1, 1]) {
+  for (const sx of [-1, 1]) {
     const pivot = new THREE.Group();
-    pivot.position.set(s * 0.56, 1.6, 0);
+    pivot.position.set(sx * 0.56, 1.6, 0);
     add(pivot, G.box(0.22, 0.8, 0.22), toon(colors.body), 0, -0.4, 0);
     inner.add(pivot);
     arms.push(pivot);
   }
   if (kind === 'rifle') {
-    add(inner, G.box(0.12, 0.14, 1.2), toon(0x2a2a2a), 0.3, 1.25, 0.5);
     arms[0].rotation.x = -1.1;
     arms[1].rotation.x = -1.1;
-  } else if (kind === 'rpg') {
-    const tube = add(inner, G.cyl(0.16, 0.16, 1.8, 8), toon(0x3d4a2a), 0.45, 2.05, 0.1);
-    tube.rotation.x = Math.PI / 2;
-    add(inner, G.cone(0.24, 0.5, 8), toon(ENEMY.accent), 0.45, 2.05, 1.1).rotation.x = Math.PI / 2;
-    arms[1].rotation.x = -2.6;
-  }
+  } else if (kind === 'rpg') arms[1].rotation.x = -2.6;
   g.scale.setScalar(1.35);
   enableShadows(g);
   return { group: g, inner, arms };
@@ -258,7 +270,7 @@ export function createRadar() {
   const dish = add(
     head,
     G.custom('dish', () => new THREE.SphereGeometry(3.0, 18, 8, 0, Math.PI * 2, 0, 1.0)),
-    new THREE.MeshToonMaterial({ color: 0xe9eef2, side: THREE.DoubleSide, gradientMap: gradientMap() }),
+    new THREE.MeshStandardMaterial({ color: 0xe9eef2, side: THREE.DoubleSide, roughness: 0.5, metalness: 0.4 }),
     0,
     0,
     0
@@ -302,7 +314,7 @@ export function createGenerator() {
       }
       return new THREE.LatheGeometry(pts, 18);
     }),
-    new THREE.MeshToonMaterial({ color: 0xd9d4c7, side: THREE.DoubleSide, gradientMap: gradientMap() })
+    new THREE.MeshStandardMaterial({ color: 0xd9d4c7, side: THREE.DoubleSide, roughness: 0.9 })
   );
   tower.position.y = 0;
   add(g, G.cyl(2.4, 2.4, 0.6, 18), toon(0xc0392b), 0, 9.5, 0);

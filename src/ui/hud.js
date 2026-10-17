@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 import { CAM_YAW } from '../game/player.js';
+import { STORY } from '../game/missions.js';
+
+const STORY_LEFT = (game) => game.save.chapter < STORY.length;
 
 const $ = (s) => document.querySelector(s);
 const _v = new THREE.Vector3();
@@ -34,6 +37,9 @@ export class HUD {
       floaters: $('#floaters'),
       winch: $('#winch-hint'),
       base: $('#base-hint'),
+      hangarBtn: $('#btn-hangar-hud'),
+      nv: $('#nv-overlay'),
+      region: $('#region-banner'),
       tbar: $('#target-bar'),
       tname: $('#target-bar .tname'),
       tfill: $('#target-bar .fill'),
@@ -59,6 +65,18 @@ export class HUD {
     this.floaters = [];
     this.el.boss.classList.remove('show');
     this.dmg = 0;
+  }
+
+  setNightVision(on) {
+    this.el.nv.classList.toggle('show', !!on);
+  }
+
+  regionBanner(name) {
+    const r = this.el.region;
+    r.textContent = name;
+    r.classList.remove('show');
+    void r.offsetWidth;
+    r.classList.add('show');
   }
 
   toast(text, type = 'info', ms = 2200) {
@@ -96,8 +114,8 @@ export class HUD {
       el.style.transform = `scaleX(${v / 100})`;
       e.fuelBar.classList.toggle('low', v < 25);
     });
-    this.set('score', e.score, game.score, (el, v) => (el.textContent = v.toLocaleString('ru-RU')));
-    this.set('lives', e.lives, game.lives, (el, v) => (el.textContent = '🚁'.repeat(Math.max(v, 0))));
+    this.set('score', e.score, game.save.credits, (el, v) => (el.textContent = '💰 ' + v.toLocaleString('ru-RU')));
+    this.set('lives', e.lives, game.regionName || '', (el, v) => (el.textContent = v));
     this.set('combo', e.combo, game.combo > 1 ? game.combo : 0, (el, v) => {
       el.textContent = v ? `КОМБО ×${v}` : '';
       el.classList.toggle('show', !!v);
@@ -116,9 +134,9 @@ export class HUD {
       el.classList.toggle('show', p.passengers.length > 0);
     });
 
-    const obj = game.mission?.current();
-    this.set('objT', e.objText, obj ? obj.text : '', (el, v) => (el.textContent = v));
-    this.set('objP', e.objProg, obj ? obj.progressText() : '', (el, v) => (el.textContent = v));
+    const obj = this.guide(game);
+    this.set('objT', e.objText, obj.text, (el, v) => (el.textContent = v));
+    this.set('objP', e.objProg, obj.progress, (el, v) => (el.textContent = v));
 
     const boss = game.boss && game.boss.alive && game.bossVisible;
     this.set('boss', e.boss, boss ? Math.round(game.boss.totalHp() * 100) : -1, (el, v) => {
@@ -138,10 +156,11 @@ export class HUD {
       el.textContent = v;
       el.classList.toggle('show', !!v);
     });
-    this.set('base', e.base, p.atBase ? (p.passengers.length ? 'Высадка пассажиров…' : 'База: дозаправка') : '', (el, v) => {
+    this.set('base', e.base, p.atBase ? (p.passengers.length ? 'Высадка пассажиров…' : 'База: заправка, боезапас, ремонт') : '', (el, v) => {
       el.textContent = v;
       el.classList.toggle('show', !!v);
     });
+    this.set('hangarBtn', e.hangarBtn, !!(p.atBase && p.atBase.main && game.mode === 'play'), (el, v) => el.classList.toggle('show', v));
 
     this.dmg = Math.max(0, this.dmg - dt * 1.6);
     const lowArmor = p.armor / p.maxArmor < 0.25 && p.alive ? 0.35 + Math.sin(game.time * 6) * 0.15 : 0;
@@ -153,9 +172,20 @@ export class HUD {
     if (this.frame % 3 === 0) this.drawRadar(game, obj);
   }
 
+  // Что сейчас показывать игроку: цель задания, путевую точку или сюжетный маркер.
+  guide(game) {
+    const o = game.mission?.current();
+    if (o) return { text: o.text, progress: o.progressText(), target: o.targetPos(), color: '#ffe14d' };
+    const m = game.ow?.storyMarker();
+    if (game.waypoint) return { text: game.waypoint.label || 'Путевая точка', progress: '', target: game.waypoint, color: '#7fd8ff' };
+    if (m) return { text: `Новое задание: «${m.def.name}» — лети к ★`, progress: '', target: m, color: '#ffe14d' };
+    if (game.ow && !STORY_LEFT(game)) return { text: 'Кампания пройдена! Зачищай аванпосты и лови события', progress: '', target: null };
+    return { text: '', progress: '', target: null };
+  }
+
   updateArrow(game, obj) {
     const e = this.el;
-    const target = obj && obj.targetPos();
+    const target = obj.target;
     if (!target || game.player.state !== 'fly') {
       e.arrow.style.display = 'none';
       e.marker.style.display = 'none';
@@ -270,7 +300,7 @@ export class HUD {
       g.fillRect(0, 0, size, size);
     }
     const p = game.player.pos;
-    const range = 170;
+    const range = game.player.stats?.radar || 170;
     const s = Math.sin(CAM_YAW), co = Math.cos(CAM_YAW);
     const map = (x, z) => {
       const dx = x - p.x, dz = z - p.z;
@@ -291,30 +321,24 @@ export class HUD {
       g.arc(sx, sy, r, 0, Math.PI * 2);
       g.fill();
     };
-    // контур острова
-    g.strokeStyle = 'rgba(240,217,160,0.35)';
-    g.lineWidth = 1.5;
-    g.beginPath();
-    const L = 268;
-    const corners = [[-L, -L], [L, -L], [L, L], [-L, L]];
-    corners.forEach(([x, z], i) => {
-      const [sx, sy] = map(x, z);
-      if (i === 0) g.moveTo(sx, sy);
-      else g.lineTo(sx, sy);
-    });
-    g.closePath();
-    g.stroke();
+    const square = (x, z, color, s = 4, clampEdge = false) => {
+      let [sx, sy] = map(x, z);
+      const ddx = sx - R, ddy = sy - R, dd = Math.hypot(ddx, ddy);
+      if (dd > R - 5) {
+        if (!clampEdge) return;
+        sx = R + (ddx / dd) * (R - 6);
+        sy = R + (ddy / dd) * (R - 6);
+      }
+      g.strokeStyle = color;
+      g.lineWidth = 2;
+      g.strokeRect(sx - s, sy - s, s * 2, s * 2);
+    };
     for (const it of game.winchables) if (it.alive && !it.attached) dot(it.pos.x, it.pos.z, it.radarColor, 2.2);
     for (const e of game.enemies) if (e.alive) dot(e.pos.x, e.pos.z, e.tag ? '#ffd34d' : e.radarColor, e.tag ? 3.2 : 2);
-    const b = game.world.base;
-    {
-      const [sx, sy] = map(b.x, b.z);
-      g.strokeStyle = '#55e0ff';
-      g.lineWidth = 2;
-      g.strokeRect(sx - 4, sy - 4, 8, 8);
-    }
-    const target = obj && obj.targetPos();
-    if (target && Math.sin(game.time * 8) > -0.3) dot(target.x, target.z, '#ffe14d', 4.2, true);
+    for (const b of game.friendlyBases()) square(b.x, b.z, '#55e0ff', 4, true);
+    for (const op of game.ow?.outposts || []) if (op.owner === 'enemy') square(op.x, op.z, '#ff5a4a', 3.5);
+    for (const ev of game.ow?.events || []) dot(ev.x, ev.z, '#ffa040', 3.4, true);
+    if (obj.target && Math.sin(game.time * 8) > -0.3) dot(obj.target.x, obj.target.z, obj.color || '#ffe14d', 4.2, true);
     g.restore();
     // игрок
     g.save();

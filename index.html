@@ -17,6 +17,8 @@
   </head>
   <body>
     <canvas id="game"></canvas>
+    <div id="cine-vignette"></div>
+    <div id="nv-overlay"></div>
 
     <!-- HUD -->
     <div id="hud" class="hidden">
@@ -31,7 +33,7 @@
           <div id="boss-bar"><div id="boss-name"></div><div class="track"><div class="fill"></div></div></div>
         </div>
         <div class="hud-right">
-          <div class="score-line"><span id="hud-score">0</span><button id="btn-pause" aria-label="Пауза">❚❚</button></div>
+          <div class="score-line"><span id="hud-score">0</span><button id="btn-map" class="hud-btn" aria-label="Карта">🗺</button><button id="btn-pause" class="hud-btn" aria-label="Пауза">❚❚</button></div>
           <div id="hud-lives"></div>
           <canvas id="radar"></canvas>
         </div>
@@ -45,6 +47,8 @@
       <div id="obj-arrow"><div class="chev">➤</div><div class="dist"></div></div>
       <div id="obj-marker">▼</div>
       <div id="target-bar"><div class="tname"></div><div class="track"><div class="fill"></div></div></div>
+      <button id="btn-hangar-hud" class="btn primary">🔧 Ангар</button>
+      <div id="region-banner"></div>
       <div id="damage-vignette"></div>
       <div id="banner"><h2></h2><p></p></div>
     </div>
@@ -68,7 +72,7 @@
         <p>Городской удар</p>
       </div>
       <div class="loader"><div class="loader-fill"></div></div>
-      <div class="loader-text">Собираем город…</div>
+      <div class="loader-text">Поднимаем остров из океана…</div>
     </section>
 
     <section id="install" class="screen">
@@ -109,51 +113,50 @@
         </div>
         <div class="menu-buttons">
           <button class="btn primary big" id="btn-play">В бой</button>
-          <button class="btn" id="btn-missions">Миссии</button>
+          <button class="btn" id="btn-missions">Сюжет</button>
           <button class="btn" id="btn-hangar">Ангар <span class="pill" id="menu-credits"></span></button>
           <button class="btn" id="btn-settings">Настройки</button>
           <button class="btn ghost hidden" id="btn-menu-install">⬇ Установить приложение</button>
         </div>
       </div>
-      <div class="version">v0.1 · прототип</div>
+      <div class="version">v0.3 · открытый мир</div>
     </section>
 
     <section id="missions" class="screen">
       <div class="panel wide">
-        <div class="panel-head"><button class="back" data-back="menu">←</button><h2>Кампания</h2></div>
-        <div id="mission-list" class="cards"></div>
+        <div class="panel-head"><button class="back" data-back="menu">←</button><h2>Сюжет</h2><div class="credits">💰 <span class="credits-val">0</span></div></div>
+        <div id="mission-list" class="cards story"></div>
       </div>
     </section>
 
-    <section id="briefing" class="screen">
+    <section id="offer" class="screen overlay">
       <div class="panel wide brief">
-        <div class="panel-head"><button class="back" data-back="missions">←</button><h2 id="brief-name"></h2></div>
+        <div class="panel-head"><h2 id="brief-name"></h2></div>
         <div class="brief-body">
           <div class="brief-text">
             <div class="brief-place" id="brief-place"></div>
             <p id="brief-story" class="typed"></p>
-            <button class="btn primary big" id="btn-launch">Вылет!</button>
+            <div id="brief-req"></div>
+            <div class="row">
+              <button class="btn primary big" id="btn-launch">Начать задание</button>
+              <button class="btn ghost" id="btn-later">Позже</button>
+            </div>
           </div>
           <div class="brief-goals">
             <h3>Задачи</h3>
             <ol id="brief-goals"></ol>
-            <div class="controls-help">
-              <div><b>Левый палец</b> — полёт</div>
-              <div><b>Пулемёт / Ракеты</b> — держи, наводятся сами</div>
-              <div><b>Hellfire</b> — самонаводящаяся ракета</div>
-              <div><b>Ловушки</b> — сбивают ракеты ЗРК</div>
-              <div><b>Зависни над ящиком или человеком</b> — лебёдка поднимет</div>
-            </div>
+            <div class="reward">Награда: <b id="brief-reward"></b></div>
           </div>
         </div>
       </div>
     </section>
 
     <section id="hangar" class="screen">
-      <div class="panel wide">
-        <div class="panel-head"><button class="back" data-back="menu">←</button><h2>Ангар</h2><div class="credits">💰 <span id="hangar-credits">0</span></div></div>
-        <div class="skins-row"><span class="muted">Окраска</span><div id="skin-list" class="skins"></div></div>
-        <div id="upgrade-list" class="cards"></div>
+      <div class="panel wide hangar">
+        <div class="panel-head"><button class="back" id="hangar-back">←</button><h2>Ангар</h2><div class="credits">💰 <span class="credits-val">0</span></div></div>
+        <div class="tabs"><button class="tab on" data-tab="modules">Модули</button><button class="tab" data-tab="skins">Окраска</button></div>
+        <div id="upgrade-list" class="cards modules"></div>
+        <div id="skin-list" class="cards skins-grid hidden"></div>
       </div>
     </section>
 
@@ -183,39 +186,48 @@
       <div class="panel">
         <h2>Пауза</h2>
         <button class="btn primary big" id="btn-resume">Продолжить</button>
-        <button class="btn" id="btn-restart">Начать заново</button>
+        <button class="btn" id="btn-pause-map">Карта острова</button>
         <label class="setting"><span>Звук</span><input type="checkbox" id="opt-sound-p" /></label>
         <button class="btn ghost" id="btn-quit">Выйти в меню</button>
+      </div>
+    </section>
+
+    <section id="map-screen" class="screen overlay">
+      <div class="map-wrap">
+        <canvas id="map-canvas"></canvas>
+        <div class="map-side">
+          <h2>Карта</h2>
+          <div class="legend">
+            <div><i class="lg base"></i>Наши базы</div>
+            <div><i class="lg outpost"></i>Вражеский аванпост</div>
+            <div><i class="lg story">★</i>Задание</div>
+            <div><i class="lg event"></i>Событие</div>
+          </div>
+          <p class="muted">Нажми на карту, чтобы поставить путевую точку.</p>
+          <div id="map-info" class="map-info"></div>
+          <button class="btn ghost" id="map-clear">Убрать точку</button>
+          <button class="btn primary" id="map-close">Закрыть</button>
+        </div>
       </div>
     </section>
 
     <section id="results" class="screen overlay">
       <div class="panel res-panel">
         <div class="res-main">
-          <h2 class="win-title">Миссия выполнена!</h2>
+          <h2 class="win-title">Задание выполнено!</h2>
           <div class="stars" id="res-stars"><span>★</span><span>★</span><span>★</span></div>
           <div class="res-credits">+ <span id="res-credits">0</span> 💰</div>
-          <button class="btn primary big" id="btn-next">Следующая миссия</button>
+          <div id="res-unlock" class="res-unlock"></div>
+          <button class="btn primary big" id="btn-next">Продолжить</button>
           <div class="row">
             <button class="btn" id="btn-res-hangar">Ангар</button>
-            <button class="btn ghost" id="btn-res-menu">Меню</button>
           </div>
         </div>
         <div class="res-table" id="res-table"></div>
       </div>
     </section>
 
-    <section id="gameover" class="screen overlay">
-      <div class="panel">
-        <h2 class="lose-title">Миссия провалена</h2>
-        <p class="muted">Все вертолёты потеряны. Прокачай броню в ангаре и попробуй снова.</p>
-        <button class="btn primary big" id="btn-retry">Повторить</button>
-        <div class="row">
-          <button class="btn" id="btn-go-hangar">Ангар</button>
-          <button class="btn ghost" id="btn-go-menu">Меню</button>
-        </div>
-      </div>
-    </section>
+    
 
     <div id="wipe"></div>
     <script type="module" src="./src/main.js"></script>

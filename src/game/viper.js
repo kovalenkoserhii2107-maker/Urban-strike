@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { toon, glow, gradientMap, G } from './materials.js';
+import { toon, glow, glass as glassMat, paint, metal as metalMat, G } from './materials.js';
 import { enableShadows } from './models.js';
 
 // Ударный вертолёт игрока в стиле AH-1Z Viper: узкий тандемный фюзеляж,
@@ -9,6 +9,8 @@ export const SKINS = {
   marines: { name: 'Морская пехота', body: 0x8e979e, belly: 0x7b848b, dark: 0x41474d, mark: 0xe9ecef, pod: 0x5d6640 },
   jungle: { name: 'Джунгли', body: 0x5c8a3c, belly: 0x4d7633, dark: 0x2c3a26, mark: 0xf2c94c, pod: 0x3f4a2c },
   desert: { name: 'Пустыня', body: 0xc9b07a, belly: 0xb39b67, dark: 0x5f5136, mark: 0x8a3b2b, pod: 0x7a6a46 },
+  night: { name: 'Ночной охотник', body: 0x2a2e33, belly: 0x22262a, dark: 0x15181b, mark: 0x8b96a0, pod: 0x2f3328 },
+  veteran: { name: 'Ветеран', body: 0x6d7a84, belly: 0x5d6870, dark: 0x2a3036, mark: 0xd9b24a, pod: 0x4a5236 },
 };
 
 function add(parent, geo, mat, x = 0, y = 0, z = 0) {
@@ -40,13 +42,15 @@ function honeycomb() {
   });
 }
 
-export function createViper(skinId = 'marines') {
+export function createViper(skinId = 'marines', mods = {}) {
+  const lv = (id) => mods?.[id] ?? 0;
   const c = SKINS[skinId] || SKINS.marines;
-  const body = toon(c.body);
-  const belly = toon(c.belly);
-  const dark = toon(c.dark);
+  // матовая авиационная краска, но с отражениями неба
+  const body = paint(c.body, { roughness: 0.55, metalness: 0.2 });
+  const belly = paint(c.belly, { roughness: 0.6, metalness: 0.15 });
+  const dark = paint(c.dark, { roughness: 0.5, metalness: 0.3 });
   const mark = toon(c.mark);
-  const metal = toon(0x2b2f33);
+  const metal = metalMat(0x2b2f33);
   const g = new THREE.Group();
 
   // --- фюзеляж ---
@@ -61,7 +65,7 @@ export function createViper(skinId = 'marines') {
   const lens = add(g, G.cyl(0.17, 0.17, 0.08, 14), glow(0x5fd4ff), 0, -0.28, 3.93);
   lens.rotation.x = Math.PI / 2;
   // кабина: два пилота друг за другом
-  const glass = new THREE.MeshToonMaterial({ color: 0x9fd8ff, gradientMap: gradientMap(), transparent: true, opacity: 0.5, depthWrite: false, emissive: 0x2a5a7a, emissiveIntensity: 0.3 });
+  const glass = glassMat(0x8fc8e8, 0.42);
   const canopy = add(g, G.sphere(0.7, 18, 12), glass, 0, 0.82, 1.55);
   canopy.scale.set(0.62, 0.58, 1.95);
   canopy.renderOrder = 2;
@@ -165,12 +169,13 @@ export function createViper(skinId = 'marines') {
   add(g, G.box(4.9, 0.16, 1.1), body, 0, -0.08, 0.05);
   const pods = [];
   const hellfires = [];
-  const podFace = new THREE.MeshToonMaterial({ map: honeycomb(), gradientMap: gradientMap() });
+  const podFace = new THREE.MeshStandardMaterial({ map: honeycomb(), roughness: 0.7, metalness: 0.3 });
   const racks = [];
   for (const s of [-1, 1]) {
     // внутренний узел: блок НУР
     add(g, G.box(0.14, 0.26, 0.5), dark, s * 1.3, -0.28, 0.1);
-    const pod = add(g, G.cyl(0.34, 0.34, 1.7, 14), [toon(c.pod), podFace, toon(c.pod)], s * 1.3, -0.62, 0.15);
+    const podR = lv('rockets') >= 2 ? 0.4 : 0.34;
+    const pod = add(g, G.cyl(podR, podR, 1.8, 14), [toon(c.pod), podFace, toon(c.pod)], s * 1.3, -0.62, 0.15);
     pod.rotation.x = Math.PI / 2;
     const podTip = new THREE.Object3D();
     podTip.position.set(s * 1.3, -0.62, 1.05);
@@ -180,9 +185,22 @@ export function createViper(skinId = 'marines') {
     add(g, G.box(0.14, 0.22, 0.5), dark, s * 2.05, -0.26, 0.1);
     add(g, G.box(0.56, 0.1, 1.3), dark, s * 2.05, -0.42, 0.1);
     racks.push(s);
-    // ракета на законцовке крыла
-    const aim = add(g, G.cyl(0.07, 0.07, 1.3, 8), toon(0xdfe3e6), s * 2.5, -0.03, 0.2);
-    aim.rotation.x = Math.PI / 2;
+    if (lv('ew') >= 1) {
+      // контейнер РЭБ на законцовке вместо ракеты
+      const ew = add(g, G.cyl(0.16, 0.16, 1.5, 10), dark, s * 2.52, -0.03, 0.2);
+      ew.rotation.x = Math.PI / 2;
+      add(g, G.sphere(0.16, 8, 6), dark, s * 2.52, -0.03, 0.95);
+      add(g, G.box(0.04, 0.4, 0.3), dark, s * 2.52, 0.15, -0.4);
+    } else {
+      // ракета на законцовке крыла
+      const aim = add(g, G.cyl(0.07, 0.07, 1.3, 8), toon(0xdfe3e6), s * 2.5, -0.03, 0.2);
+      aim.rotation.x = Math.PI / 2;
+    }
+    if (lv('armor') >= 2) {
+      // накладные бронеплиты кабины и двигателей
+      add(g, G.box(0.06, 0.7, 2.4), dark, s * 0.69, 0.15, 1.6);
+      add(g, G.box(0.06, 0.5, 1.6), dark, s * 1.22, 0.75, -0.7);
+    }
   }
   // порядок пусков чередует борта, чтобы вес «уходил» симметрично
   for (let row = 0; row < 2; row++)
@@ -224,6 +242,12 @@ export function createViper(skinId = 'marines') {
   const rotor = new THREE.Group();
   rotor.position.set(0, 2.0, -0.45);
   add(rotor, G.sphere(0.3, 10, 8), dark);
+  if (lv('sensors') >= 2) {
+    // надвтулочный радар, как у «Лонгбоу»
+    const dome = add(g, G.sphere(0.55, 16, 10), toon(0xc9cdd0), 0, 2.55, -0.45);
+    dome.scale.y = 0.6;
+    add(g, G.cyl(0.08, 0.08, 0.5, 6), dark, 0, 2.25, -0.45);
+  }
   for (let i = 0; i < 2; i++) {
     const blade = add(rotor, G.box(0.36, 0.06, 8.4), toon(0x2a2d30));
     blade.rotation.y = (i * Math.PI) / 2 + Math.PI / 4;

@@ -2,14 +2,16 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { World } from './world.js';
+import { World, LAYOUT } from './world.js';
 import { FX } from './fx.js';
 import { Projectiles } from './projectiles.js';
 import { Player, CAM_YAW } from './player.js';
 import { Pickup } from './pickups.js';
 import { Rescuee } from './enemies.js';
-import { MissionRunner, MISSIONS } from './missions.js';
+import { MissionRunner, STORY } from './missions.js';
+import { OpenWorld } from './openworld.js';
 import { Input } from './input.js';
 import { Audio } from './audio.js';
 import { HUD } from '../ui/hud.js';
@@ -18,9 +20,9 @@ import { clamp, damp } from '../core/utils.js';
 import { persist } from '../core/save.js';
 
 export const QUALITY = {
-  low: { dpr: 1, shadow: 1024, bloom: false, density: 0.55, fx: 0.6 },
-  medium: { dpr: 1.5, shadow: 2048, bloom: false, density: 0.85, fx: 0.85 },
-  high: { dpr: 2, shadow: 2048, bloom: true, density: 1, fx: 1 },
+  low: { dpr: 1, shadow: 1024, post: false, ao: false, density: 0.5, fx: 0.6 },
+  medium: { dpr: 1.5, shadow: 2048, post: false, ao: false, density: 0.75, fx: 0.85 },
+  high: { dpr: 2, shadow: 2048, post: true, ao: true, density: 1, fx: 1 },
 };
 const ORDER = ['low', 'medium', 'high'];
 const CAM_ZOOM = { near: 0.82, normal: 1, far: 1.25 };
@@ -35,10 +37,9 @@ export class Game {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance', stencil: false });
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
-    this.renderer.toneMapping = THREE.NeutralToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.camera = new THREE.PerspectiveCamera(38, 1, 1, 900);
+    this.camera = new THREE.PerspectiveCamera(38, 1, 1, 1400);
     this.audio = new Audio();
     this.input = new Input(document.querySelector('#controls'));
     this.hud = new HUD();
@@ -46,9 +47,13 @@ export class Game {
     this.timeScale = 1;
     this.time = 0;
     this.shakeAmt = 0;
+    this.combo = 1;
+    this.lastKill = -10;
     this.camLook = new THREE.Vector3();
     this.fpsAcc = { t: 0, n: 0 };
-    this.setQuality(save.settings.quality);
+    this.waypoint = null;
+    this.setQuality(save.settings.quality, false);
+    this.renderer.shadowMap.enabled = this.qualityLevel !== 'low';
     window.addEventListener('resize', () => this.resize());
     this.resize();
     this.last = performance.now();
@@ -57,16 +62,19 @@ export class Game {
   }
 
   // ---------- качество графики ----------
-  setQuality(setting) {
+  setQuality(setting, apply = true) {
     this.qualitySetting = setting;
     this.qualityLevel = setting === 'auto' ? (isCoarse() ? 'medium' : 'high') : setting;
-    this.applyQuality();
+    this.q = QUALITY[this.qualityLevel];
+    if (apply) this.applyQuality();
   }
   applyQuality() {
-    const q = QUALITY[this.qualityLevel];
-    this.q = q;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, q.dpr));
-    if (this.world) this.world.setShadowQuality(q.shadow);
+    this.q = QUALITY[this.qualityLevel];
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.q.dpr));
+    // на низком качестве тени выключены: вдвое меньше вызовов отрисовки
+    this.renderer.shadowMap.enabled = this.qualityLevel !== 'low';
+    if (this.scene) this.scene.traverse((o) => o.material && (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => (m.needsUpdate = true)));
+    if (this.world) this.world.setShadowQuality(this.q.shadow);
     this.buildComposer();
     this.resize();
   }
@@ -75,13 +83,18 @@ export class Game {
       this.composer.dispose();
       this.composer = null;
     }
-    if (!this.q.bloom || !this.scene) return;
+    if (!this.q.post || !this.scene) return;
     const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
     const rt = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: 4 });
     this.composer = new EffectComposer(this.renderer, rt);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x / 2, size.y / 2), 0.55, 0.45, 0.92);
-    this.composer.addPass(this.bloom);
+    if (this.q.ao) {
+      const ao = new GTAOPass(this.scene, this.camera, size.x, size.y);
+      ao.updateGtaoMaterial({ radius: 2.5, distanceExponent: 1.5, thickness: 2, scale: 1.2 });
+      ao.blendIntensity = 0.85;
+      this.composer.addPass(ao);
+    }
+    this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(size.x / 2, size.y / 2), 0.3, 0.5, 0.96));
     this.composer.addPass(new OutputPass());
   }
   autoQuality(rawDt) {
@@ -111,86 +124,62 @@ export class Game {
     }
   }
 
-  // ---------- загрузка миссии / фона меню ----------
-  unload() {
-    if (!this.scene) return;
-    this.projectiles?.clear();
-    this.world?.dispose();
-    this.audio.stopRotor();
-    this.scene = null;
-    this.world = null;
-    this.mission = null;
-    this.boss = null;
-  }
-
-  build(def, withMission) {
-    this.unload();
+  // ---------- мир: строится один раз за сессию ----------
+  buildWorld() {
+    if (this.world) return;
     this.scene = new THREE.Scene();
     this.enemies = [];
     this.winchables = [];
     this.timers = [];
     this.walkers = [];
-    this.time = 0;
-    this.timeScale = 1;
-    this.world = new World(this.scene, { seed: def.seed, lighting: def.lighting, sites: def.sites, density: this.q.density });
+    this.world = new World(this.scene, this.renderer, { seed: 2024, lighting: 'day', density: this.q.density });
     this.world.setShadowQuality(this.q.shadow);
     this.world.onPropDestroyed = (it) => this.onPropDestroyed(it);
-    this.fx = new FX(this.scene, this.q.fx);
+    this.world.onSmoke = (x, y, z) => this.fx.puff(x, y, z, 3.2, false, 4);
+    this.fx = new FX(this.scene, this.q.fx, this.world);
     this.projectiles = new Projectiles(this);
-    this.player = new Player(this, this.save.upgrades);
-    this.score = 0;
-    this.combo = 1;
-    this.lastKill = -10;
-    this.lives = 3;
+    this.player = new Player(this);
     this.stats = { kills: 0, shots: 0, hits: 0, damage: 0, civilians: 0, rescued: 0, buildings: 0 };
-    this.hud.reset();
-    if (withMission) this.mission = new MissionRunner(this, def);
     this.buildComposer();
     this.resize();
-    // прогрев шейдеров, чтобы не было рывка в первом кадре
     this.updateCamera(0, true);
-    this.renderer.compile(this.scene, this.camera);
   }
 
   startAttract() {
-    this.build({ seed: 77, lighting: 'sunset', sites: 2 }, false);
+    this.buildWorld();
+    if (this.ow && this.mode !== 'attract') this.resumePos = this.player.pos.clone();
     this.mode = 'attract';
-    this.player.state = 'fly';
-    this.player.pos.y = 18;
-    this.player.invuln = 0;
     this.attractT = 0;
+    const p = this.player;
+    p.state = 'fly';
+    p.invuln = 0;
+    p.pos.set(LAYOUT.city.x + 120, 40, LAYOUT.city.z);
+    this.hud.reset();
   }
 
-  startMission(index) {
-    const def = MISSIONS[index];
-    this.missionIndex = index;
-    this.missionDef = def;
-    this.build(def, true);
-    this.mode = 'play';
-    this.cineT = 0;
-    this.input.reset();
-    this.input.enabled = false;
+  // Вход в открытый мир (из меню). Повторный вход продолжает с того же места.
+  startCampaign() {
+    this.buildWorld();
     this.audio.unlock();
     this.audio.startRotor();
     if (this.save.settings.music) this.audio.startMusic('action');
-    if (index === 0 && !this.save.tutorialDone) this.tutorial();
-  }
-
-  // Короткое обучение в первой миссии: подсказки по очереди, один раз.
-  tutorial() {
-    const touch = isCoarse();
-    const steps = [
-      [4, touch ? 'Веди пальцем по левой половине экрана — вертолёт полетит туда' : 'WASD или стрелки — полёт'],
-      [10, 'Держи «Пулемёт» или «Ракеты» — прицел сам наводится на ближайшую цель'],
-      [17, 'Жёлтая стрелка и мигающая точка на радаре ведут к цели задания'],
-      [24, 'Зависни над ящиком или человеком — лебёдка поднимет его на борт'],
-      [31, 'На базе (площадка «H») вертолёт дозаправляется и высаживает спасённых'],
-    ];
-    for (const [t, text] of steps) this.after(t, () => this.mode === 'play' && this.hud.toast(text, 'info', 5000));
-    this.after(33, () => {
-      this.save.tutorialDone = true;
-      persist();
-    });
+    if (!this.ow) {
+      this.ow = new OpenWorld(this);
+      this.player.respawn(this.world.base);
+      this.cineT = 0;
+      if (this.save.chapter === 0 && !this.save.tutorialDone) this.tutorial();
+    } else {
+      // продолжаем с ближайшей к последней позиции нашей базы
+      const at = this.resumePos || this.player.pos;
+      const base = this.nearestBase(at.x, at.z);
+      this.player.respawn(base);
+      this.camLook.set(base.x, this.world.heightAt(base.x, base.z), base.z);
+      this.cineT = 0;
+    }
+    this.mode = 'play';
+    this.input.reset();
+    this.input.enabled = this.cineT >= 3;
+    this.last = performance.now();
   }
 
   pause(on) {
@@ -202,6 +191,115 @@ export class Game {
       this.last = performance.now();
       this.input.reset();
     }
+  }
+
+  tutorial() {
+    const touch = isCoarse();
+    const steps = [
+      [4, touch ? 'Веди пальцем по левой половине экрана — вертолёт полетит туда' : 'WASD или стрелки — полёт'],
+      [10, 'Держи «Пулемёт» или «Ракеты» — прицел сам наводится на ближайшую цель'],
+      [17, 'Золотая стрелка ведёт к сюжетному заданию. Кнопка «Карта» — весь остров'],
+      [24, 'Красные аванпосты можно зачистить: они станут нашими точками дозаправки'],
+      [31, 'Зависни над ящиком или человеком — лебёдка поднимет его на борт'],
+      [38, 'На базе «Сокол» открывай ангар: модули открывают новые задания'],
+    ];
+    for (const [t, text] of steps) this.after(t, () => this.mode === 'play' && this.hud.toast(text, 'info', 5000));
+    this.after(40, () => {
+      this.save.tutorialDone = true;
+      persist();
+    });
+  }
+
+  // ---------- сюжетные задания ----------
+  startStory(def) {
+    this.hooks.transition(() => {
+      if (this.world.lightingName !== def.lighting) this.world.setLighting(def.lighting);
+      this.mission = new MissionRunner(this, def);
+      this.missionDeaths = 0;
+      this.missionStats = { ...this.stats };
+      this.missionStart = this.time;
+      this.applyNightVision();
+    }).then(() => this.hooks.banner(def.name, def.place));
+  }
+
+  onStoryComplete(runner) {
+    const def = runner.def;
+    this.mode = 'outro';
+    this.outroT = 0;
+    this.input.enabled = false;
+    this.timeScale = 0.4;
+    this.hooks.banner('ЗАДАНИЕ ВЫПОЛНЕНО', def.name);
+    this.after(1.6, () => (this.timeScale = 1));
+    this.after(3.4, () => {
+      const t = this.time - this.missionStart;
+      let stars = 1;
+      if (this.missionDeaths <= 1) stars = 2;
+      if (this.missionDeaths === 0 && t < 900) stars = 3;
+      const ms = this.missionStats;
+      const res = {
+        def, time: t, stars, reward: def.reward,
+        kills: this.stats.kills - ms.kills, rescued: this.stats.rescued - ms.rescued, buildings: this.stats.buildings - ms.buildings,
+        accuracy: this.stats.shots - ms.shots ? Math.round(((this.stats.hits - ms.hits) / (this.stats.shots - ms.shots)) * 100) : 0,
+        civilians: this.stats.civilians - ms.civilians,
+      };
+      this.save.credits += def.reward;
+      this.save.chapter = Math.max(this.save.chapter, STORY.indexOf(def) + 1);
+      this.save.stars[def.id] = Math.max(this.save.stars[def.id] || 0, stars);
+      persist();
+      this.mission = null;
+      this.boss = null;
+      this.bossVisible = false;
+      this.mode = 'paused';
+      this.audio.setRotor(0, 0);
+      this.hooks.onComplete(res);
+    });
+  }
+
+  // Вернуться в мир после экрана итогов.
+  resumeAfterStory() {
+    if (this.world.lightingName !== 'day') this.world.setLighting('day');
+    this.applyNightVision();
+    this.mode = 'play';
+    this.input.enabled = true;
+    this.last = performance.now();
+  }
+
+  applyNightVision() {
+    const nv = this.world.night && this.player.stats.nv;
+    this.nightVision = nv;
+    this.renderer.toneMappingExposure = this.world.light.exposure * (nv ? 2.2 : 1);
+    this.hud.setNightVision(nv);
+  }
+
+  // ---------- базы ----------
+  friendlyBases() {
+    return this.ow ? this.ow.friendlyBases() : [{ id: 'fob', x: LAYOUT.fob.x, z: LAYOUT.fob.z, radius: 14, main: true }];
+  }
+  nearestBase(x, z) {
+    let best = null, bd = Infinity;
+    for (const b of this.friendlyBases()) {
+      const d = Math.hypot(b.x - x, b.z - z);
+      if (d < bd) {
+        bd = d;
+        best = b;
+      }
+    }
+    return best;
+  }
+
+  // Покупка в ангаре: характеристики и внешний вид обновляются сразу.
+  refitHeli() {
+    const p = this.player;
+    const state = { pos: p.pos.clone(), yaw: p.yaw, st: p.state, pax: p.passengers };
+    p.dispose();
+    this.player = new Player(this);
+    const np = this.player;
+    np.pos.copy(state.pos);
+    np.yaw = state.yaw;
+    np.state = state.st === 'fly' ? 'fly' : np.state;
+    np.passengers = state.pax;
+    np.invuln = 0;
+    this.applyNightVision();
   }
 
   // ---------- игровые события ----------
@@ -239,9 +337,15 @@ export class Game {
     const d = Math.hypot(x - this.player.pos.x, z - this.player.pos.z);
     if (d < 70) this.shake(a * (1 - d / 70));
   }
-  addScore(v, pos, cls = '') {
-    this.score += v;
-    if (pos) this.hud.floater('+' + v, pos, cls);
+  addCredits(v, pos, cls = '') {
+    v = Math.round(v);
+    if (!v) return;
+    this.save.credits = Math.max(0, this.save.credits + v);
+    if (pos) this.hud.floater((v > 0 ? '+' : '') + v, pos, cls || (v < 0 ? 'bad' : ''));
+  }
+  // старое имя: очки теперь — кредиты
+  addScore(v, pos, cls) {
+    this.addCredits(v / 5, pos, cls);
   }
 
   applySplash(x, y, z, r, dmg, team) {
@@ -254,14 +358,14 @@ export class Game {
       }
       for (const b of this.world.buildingsNear(x, z, r)) {
         const dx = Math.max(Math.abs(x - b.x) - b.w / 2, 0), dz = Math.max(Math.abs(z - b.z) - b.d / 2, 0);
-        if (Math.hypot(dx, dz) < r && y < b.top + 2) this.damageBuilding(b, dmg * 0.55);
+        if (Math.hypot(dx, dz) < r && y < b.y + b.top + 2) this.damageBuilding(b, dmg * 0.55);
       }
     } else if (this.player.alive) {
       const p = this.player.pos;
       const d = Math.hypot(p.x - x, p.y - y, p.z - z);
       if (d < r) this.player.damage(dmg * (1 - 0.5 * (d / r)));
     }
-    if (y < 7) this.world.blast(x, z, r * 0.7);
+    if (y < this.fx.ground(x, z) + 7) this.world.blast(x, z, r * 0.7);
   }
 
   damageBuilding(b, dmg) {
@@ -274,16 +378,17 @@ export class Game {
       const a = Math.random() * Math.PI * 2;
       const r = Math.max(b.w, b.d) * 0.6;
       this.fx.smoke.spawn({
-        x: b.x + Math.cos(a) * r, y: Math.random() * b.h * 0.6, z: b.z + Math.sin(a) * r,
+        x: b.x + Math.cos(a) * r, y: b.y + Math.random() * b.h * 0.6, z: b.z + Math.sin(a) * r,
         vx: Math.cos(a) * 4, vy: 2 + Math.random() * 3, vz: Math.sin(a) * 4, drag: 1,
         life: 2 + Math.random() * 1.5, s0: 2, s1: 4.5 + Math.random() * 2, c0: dust, c1: dust, fadeFrom: 0.6, growRate: 1.5,
       });
     }
-    this.fx.debrisBurst(b.x, b.h * 0.6, b.z, Math.round(16 * this.q.fx), b.wallColor, 2);
+    this.fx.debrisBurst(b.x, b.y + b.h * 0.6, b.z, Math.round(16 * this.q.fx), b.wallColor, 2);
     this.world.blast(b.x, b.z, Math.max(b.w, b.d) * 0.6);
-    this.addScore(60, new THREE.Vector3(b.x, b.h, b.z));
+    this.addCredits(12, new THREE.Vector3(b.x, b.y + b.h, b.z));
     if (b.crate) {
       const type = b.crate;
+      b.crate = null;
       this.after(1.7, () => {
         this.addPickup(type, b.x, b.z);
         this.hud.toast('Под обломками нашёлся ящик!', 'good', 1400);
@@ -296,28 +401,27 @@ export class Game {
     const y = it.y || 0;
     if (kind === 'car') {
       this.after(0.08 + Math.random() * 0.2, () => {
-        this.fx.explosion(it.x, 1, it.z, 0.9, 0x666666);
-        this.fx.addFire(it.x, 1, it.z, 5, 0.7);
+        this.fx.explosion(it.x, y + 1, it.z, 0.9, 0x666666);
+        this.fx.addFire(it.x, y + 1, it.z, 5, 0.7);
         this.audio.play('boom', it.x, it.z);
       });
       if (it.civilian) {
         this.stats.civilians++;
-        this.score = Math.max(0, this.score - 50);
-        this.hud.floater('−50', new THREE.Vector3(it.x, 3, it.z), 'bad');
+        this.addCredits(-25, new THREE.Vector3(it.x, y + 3, it.z));
       }
     } else if (kind === 'explosive') {
       this.after(0.15, () => {
-        this.fx.explosion(it.x, 2, it.z, 2.2, 0xd8463c);
-        this.fx.addFire(it.x, 1, it.z, 12, 1.6);
+        this.fx.explosion(it.x, y + 2, it.z, 2.2, 0xb83a2e);
+        this.fx.addFire(it.x, y + 1, it.z, 12, 1.6);
         this.audio.play('boomBig', it.x, it.z);
         this.shakeAt(it.x, it.z, 1.2);
-        this.applySplash(it.x, 2, it.z, 10, 90, 'player');
+        this.applySplash(it.x, y + 2, it.z, 10, 90, 'player');
       });
     } else if (kind === 'tree' || kind === 'bush') {
       this.fx.debrisBurst(it.x, y + 3, it.z, 5, it.color ?? it.set.opts.debris, 0.8);
       this.fx.puff(it.x, y + 3, it.z, 1.5);
     } else if (kind === 'lamp') {
-      this.fx.spark(it.x, 5, it.z, 6);
+      this.fx.spark(it.x, y + 5, it.z, 6);
     } else {
       this.fx.debrisBurst(it.x, y + 1, it.z, 6, it.color ?? it.set.opts.debris, 1);
     }
@@ -325,18 +429,17 @@ export class Game {
 
   onEnemyKilled(e) {
     this.stats.kills++;
-    if (this.time - this.lastKill < 3.2) this.combo = Math.min(this.combo + 1, 9);
+    if (this.time - this.lastKill < 3.2) this.combo = Math.min(this.combo + 1, 5);
     else this.combo = 1;
     this.lastKill = this.time;
-    const v = e.score * this.combo;
-    this.addScore(v, e.aimPoint().clone(), e.tag ? 'big' : '');
-    if (!e.tag && e.radius > 2.5 && Math.random() < 0.18) {
+    this.addCredits((e.score / 5) * this.combo + (e.bounty || 0), e.aimPoint().clone(), e.tag ? 'big' : '');
+    if (!e.tag && e.radius > 2.5 && Math.random() < 0.2) {
       const type = ['fuel', 'ammo', 'armor'][Math.floor(Math.random() * 3)];
       this.after(0.6, () => this.addPickup(type, e.pos.x + 3, e.pos.z));
     }
     if (e.tag && e.tag.targets && e.tag.targets.length > 1) {
       const left = e.tag.targets.filter((t) => t.alive).length;
-      if (left > 0) this.hud.toast(`${e.label || 'Цель'} уничтожен(а) — осталось ${left}`, 'good', 1600);
+      if (left > 0) this.hud.toast(`${e.label || 'Цель'}: уничтожено, осталось ${left}`, 'good', 1600);
     }
   }
 
@@ -345,14 +448,14 @@ export class Game {
     for (let i = 0; i < n; i++) {
       this.after(i * 0.28, () => {
         const x = c.x + (Math.random() - 0.5) * e.radius * 1.6, z = c.z + (Math.random() - 0.5) * e.radius * 1.6;
-        this.fx.explosion(x, c.y * Math.random(), z, size * 0.6);
+        this.fx.explosion(x, e.pos.y + (c.y - e.pos.y) * Math.random(), z, size * 0.6);
         this.audio.play('boom', x, z);
         this.shake(0.4);
       });
     }
     this.after(n * 0.28 + 0.2, () => {
       this.fx.explosion(c.x, c.y, c.z, size * 1.4);
-      this.fx.addFire(c.x, 1, c.z, 20, size * 0.8);
+      this.fx.addFire(c.x, e.pos.y + 1, c.z, 20, size * 0.8);
       this.audio.play('boomBig', c.x, c.z);
       this.shake(1.6);
       this.vibrate([60, 30, 100]);
@@ -363,12 +466,13 @@ export class Game {
   onRescued(p) {
     this.stats.rescued++;
     if (p.objective) p.objective.delivered++;
-    this.addScore(500, this.player.pos.clone(), 'big');
+    this.addCredits(100 + (p.bounty || 0), this.player.pos.clone(), 'big');
     this.audio.play('rescue');
-    this.hud.toast(p.kind === 'pilot' ? 'Пилот спасён!' : 'Заложник спасён!', 'good', 1300);
+    this.hud.toast(p.kind === 'pilot' ? 'Пилот спасён!' : 'Человек спасён!', 'good', 1300);
+    const b = this.player.atBase || this.world.base;
     const m = createPerson(p.kind);
-    const b = this.world.base;
-    m.group.position.set(b.x + (Math.random() - 0.5) * 4, 0, b.z + (Math.random() - 0.5) * 4);
+    const y = this.world.heightAt(b.x, b.z);
+    m.group.position.set(b.x + (Math.random() - 0.5) * 4, y, b.z + (Math.random() - 0.5) * 4);
     this.scene.add(m.group);
     this.walkers.push({ m, t: 0, tx: b.x - 15, tz: b.z - 8 });
   }
@@ -377,30 +481,7 @@ export class Game {
     this.audio.play('objective');
     this.vibrate([30, 40, 30]);
     this.hooks.banner('ЗАДАЧА ВЫПОЛНЕНА', next ? 'Далее: ' + next.text : '');
-    this.addScore(1000, this.player.pos.clone(), 'big');
-  }
-
-  onMissionComplete() {
-    this.mode = 'outro';
-    this.outroT = 0;
-    this.input.enabled = false;
-    this.timeScale = 0.4;
-    this.hooks.banner('МИССИЯ ВЫПОЛНЕНА', this.missionDef.name);
-    this.after(1.6, () => {
-      this.timeScale = 1;
-    });
-    this.after(3.4, () => {
-      const t = this.time;
-      const lost = 3 - this.lives;
-      let stars = 1;
-      if (lost <= 1) stars = 2;
-      if (lost === 0 && t < this.missionDef.par && this.stats.civilians < 6) stars = 3;
-      const accuracy = this.stats.shots ? Math.round((this.stats.hits / this.stats.shots) * 100) : 0;
-      const bonus = this.lives * 1000;
-      this.audio.stopRotor();
-      this.hooks.onComplete({ index: this.missionIndex, time: t, score: this.score + bonus, bonus, stars, accuracy, ...this.stats });
-      this.mode = 'idle';
-    });
+    this.addCredits(200, this.player.pos.clone(), 'big');
   }
 
   onPlayerDying() {
@@ -411,22 +492,21 @@ export class Game {
 
   onPlayerDead() {
     this.timeScale = 1;
-    this.lives--;
+    if (this.mission) this.missionDeaths++;
     for (const p of this.player.passengers) p.reset();
     this.player.passengers = [];
+    const repair = Math.min(this.save.credits, 150);
     this.after(2.6, () => {
-      if (this.lives > 0) {
-        this.hooks.transition(() => {
-          this.player.respawn();
-          this.projectiles.clear();
-          this.cineT = 1.5;
-          this.hud.toast(`Новый вертолёт. Осталось жизней: ${this.lives}`, 'info', 2200);
-        });
-      } else {
-        this.mode = 'idle';
-        this.audio.stopRotor();
-        this.hooks.onGameOver({ score: this.score });
-      }
+      this.hooks.transition(() => {
+        const base = this.nearestBase(this.player.pos.x, this.player.pos.z);
+        this.player.respawn(base);
+        this.projectiles.clear();
+        this.camLook.set(base.x, this.world.heightAt(base.x, base.z), base.z);
+        this.cineT = 1.5;
+        this.save.credits -= repair;
+        persist();
+        this.hud.toast(`Новый вертолёт на базе «${base.name || 'Сокол'}». Ремонт: −${repair} 💰`, 'info', 2600);
+      });
     });
   }
 
@@ -438,9 +518,9 @@ export class Game {
     const fit = clamp(1.05 / Math.min(aspect, 1.35) + (aspect < 1 ? 0.55 : 0), 1, 2.6);
     let yaw = CAM_YAW, dist = 1, height = 1;
     if (this.mode === 'attract') {
-      yaw = CAM_YAW + this.attractT * 0.12;
-      dist = 0.8;
-      height = 0.71;
+      yaw = CAM_YAW + this.attractT * 0.1;
+      dist = 1.1;
+      height = 0.75;
     } else if (this.cineT !== undefined && this.cineT < 3) {
       const k = clamp(this.cineT / 3, 0, 1);
       const e = 1 - Math.pow(1 - k, 3);
@@ -452,12 +532,13 @@ export class Game {
       dist = 0.96;
       height = 0.9;
     }
+    const ground = Math.max(this.world.heightAt(p.pos.x, p.pos.z), this.world.waterLevel);
     const lx = p.pos.x + p.vel.x * 0.5, lz = p.pos.z + p.vel.z * 0.5;
-    const ly = this.mode === 'play' && this.cineT >= 3 ? p.pos.y * 0.45 : p.pos.y * 0.75;
+    const ly = ground + (p.pos.y - ground) * (this.mode === 'play' && this.cineT >= 3 ? 0.45 : 0.75);
     if (snap) this.camLook.set(lx, ly, lz);
     else {
       this.camLook.x = damp(this.camLook.x, lx, 4, dt);
-      this.camLook.y = damp(this.camLook.y, ly, 4, dt);
+      this.camLook.y = damp(this.camLook.y, ly, 3, dt);
       this.camLook.z = damp(this.camLook.z, lz, 4, dt);
     }
     const zoom = this.mode === 'attract' ? 1 : CAM_ZOOM[this.save.settings.camera] ?? 1;
@@ -471,7 +552,6 @@ export class Game {
       this.shakeAmt *= Math.exp(-6 * dt);
     }
     if (this.mode === 'attract' && aspect > 1) {
-      // в меню вертолёт смещён вправо, слева — кнопки
       const off = 14 * fit;
       cam.position.x -= Math.cos(yaw) * off;
       cam.position.z += Math.sin(yaw) * off;
@@ -494,16 +574,18 @@ export class Game {
     const dt = rawDt * this.timeScale;
     const input = this.input.poll();
     if (input.pausePressed && this.mode === 'play') this.hooks.onPause();
+    if (input.mapPressed && this.mode === 'play') this.hooks.openMap();
     this.time += dt;
 
     if (this.mode === 'attract') {
       this.attractT += rawDt;
       const p = this.player;
-      const a = this.attractT * 0.18;
-      const tx = Math.cos(a) * 120, tz = Math.sin(a) * 120;
+      const a = this.attractT * 0.1;
+      const tx = LAYOUT.city.x + Math.cos(a) * 150, tz = LAYOUT.city.z + Math.sin(a) * 150;
       p.vel.set((tx - p.pos.x) * 0.6, 0, (tz - p.pos.z) * 0.6);
       p.pos.x += p.vel.x * dt;
       p.pos.z += p.vel.z * dt;
+      p.pos.y = damp(p.pos.y, this.world.clearance(p.pos.x, p.pos.z, 8) + 22, 1, dt);
       p.yaw = Math.atan2(p.vel.x, p.vel.z);
       p.applyTransform(dt, 18, 6);
       p.model.rotor.rotation.y += dt * 32;
@@ -524,29 +606,19 @@ export class Game {
       }
       this.projectiles.update(dt);
       if (this.combo > 1 && this.time - this.lastKill > 3.2) this.combo = 1;
-      for (let i = this.walkers.length - 1; i >= 0; i--) {
-        const w = this.walkers[i];
-        w.t += dt;
-        const o = w.m.group.position;
-        const dx = w.tx - o.x, dz = w.tz - o.z;
-        const d = Math.hypot(dx, dz);
-        if (d < 1 || w.t > 6) {
-          this.scene.remove(w.m.group);
-          this.walkers.splice(i, 1);
-          continue;
-        }
-        o.x += (dx / d) * 6 * dt;
-        o.z += (dz / d) * 6 * dt;
-        w.m.group.rotation.y = Math.atan2(dx, dz);
-        w.m.inner.position.y = Math.abs(Math.sin(w.t * 12)) * 0.2;
-        w.m.arms[0].rotation.x = Math.sin(w.t * 12) * 0.8;
-        w.m.arms[1].rotation.x = -Math.sin(w.t * 12) * 0.8;
-      }
+      this.updateWalkers(dt);
       this.mission?.update();
+      this.ow?.update(dt);
       if (this.mode === 'outro') this.outroT += rawDt;
+      this.trackRegion();
       this.hud.update(rawDt, this);
       const sp = Math.hypot(this.player.vel.x, this.player.vel.z);
       this.audio.setRotor(this.player.alive ? 1 : 0, sp);
+      this.saveT = (this.saveT || 0) + rawDt;
+      if (this.saveT > 15) {
+        this.saveT = 0;
+        persist();
+      }
     }
     for (let i = this.timers.length - 1; i >= 0; i--) {
       if (this.time >= this.timers[i].t) {
@@ -555,14 +627,46 @@ export class Game {
         t.fn();
       }
     }
-    this.fx.update(dt);
-    this.world.update(dt, this.player.pos, this.camera.position);
+    this.fx.update(dt, this.camera);
+    this.world.update(dt, this.player.pos);
     this.world.followSun(this.player.pos.x, this.player.pos.z);
     this.updateCamera(rawDt);
     this.audio.setListener(this.player.pos.x, this.player.pos.z);
     if (this.composer) this.composer.render(rawDt);
     else this.renderer.render(this.scene, this.camera);
   }
+
+  trackRegion() {
+    this.regionT = (this.regionT || 0) + 1;
+    if (this.regionT % 30) return;
+    const name = this.world.regionAt(this.player.pos.x, this.player.pos.z);
+    if (name !== this.regionName) {
+      if (this.regionName) this.hud.regionBanner(name);
+      this.regionName = name;
+    }
+  }
+
+  updateWalkers(dt) {
+    for (let i = this.walkers.length - 1; i >= 0; i--) {
+      const w = this.walkers[i];
+      w.t += dt;
+      const o = w.m.group.position;
+      const dx = w.tx - o.x, dz = w.tz - o.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 1 || w.t > 6) {
+        this.scene.remove(w.m.group);
+        this.walkers.splice(i, 1);
+        continue;
+      }
+      o.x += (dx / d) * 6 * dt;
+      o.z += (dz / d) * 6 * dt;
+      o.y = this.world.heightAt(o.x, o.z);
+      w.m.group.rotation.y = Math.atan2(dx, dz);
+      w.m.inner.position.y = Math.abs(Math.sin(w.t * 12)) * 0.2;
+      w.m.arms[0].rotation.x = Math.sin(w.t * 12) * 0.8;
+      w.m.arms[1].rotation.x = -Math.sin(w.t * 12) * 0.8;
+    }
+  }
 }
 
-export { MISSIONS };
+export { STORY };

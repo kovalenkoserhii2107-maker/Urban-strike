@@ -3,7 +3,7 @@ export class Input {
   constructor(root) {
     this.move = { x: 0, y: 0 };
     this.held = { gun: false, hydra: false, hellfire: false, flare: false };
-    this.pressed = { hellfire: false, flare: false, pause: false };
+    this.pressed = { hellfire: false, flare: false, pause: false, map: false };
     this.keys = new Set();
     this.stick = { id: null, ox: 0, oy: 0, x: 0, y: 0 };
     this.enabled = true;
@@ -72,6 +72,10 @@ export class Input {
       if (e.code === 'KeyE' || e.code === 'KeyK') this.pressed.hellfire = true;
       if (e.code === 'KeyF' || e.code === 'KeyL') this.pressed.flare = true;
       if (e.code === 'Escape' || e.code === 'KeyP') this.pressed.pause = true;
+      if (e.code === 'KeyM' || e.code === 'Tab') {
+        this.pressed.map = true;
+        e.preventDefault();
+      }
       if (e.code === 'Space') e.preventDefault();
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
@@ -107,6 +111,7 @@ export class Input {
       edge(1, 'hellfire');
       edge(3, 'flare');
       edge(9, 'pause');
+      edge(8, 'map');
       break;
     }
     const m = Math.hypot(x, y);
@@ -123,9 +128,10 @@ export class Input {
       hellfirePressed: this.enabled && this.pressed.hellfire,
       flarePressed: this.enabled && this.pressed.flare,
       pausePressed: this.pressed.pause,
+      mapPressed: this.pressed.map,
     };
     if (!this.enabled) out.move = { x: 0, y: 0 };
-    this.pressed.hellfire = this.pressed.flare = this.pressed.pause = false;
+    this.pressed.hellfire = this.pressed.flare = this.pressed.pause = this.pressed.map = false;
     return out;
   }
 

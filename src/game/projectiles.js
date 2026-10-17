@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { toon, glow, G } from './materials.js';
 import { segmentPointDist, clamp } from '../core/utils.js';
-import { islandSdf } from './world.js';
 
 export const KINDS = {
   gun: { speed: 150, dmg: 5, splash: 0, life: 0.7, tracer: 'player' },
@@ -87,8 +86,8 @@ export class Projectiles {
       g.fx.explosion(x, y, z, size);
       g.audio.play(size > 1 ? 'boomBig' : 'boom', x, z);
       g.shakeAt(x, z, size * 0.5);
-    } else if (y < 0.6) {
-      if (islandSdf(x, z) > 0) g.fx.puff(x, 0, z, 0.8, true, 5);
+    } else if (y < g.fx.ground(x, z) + 0.6) {
+      if (g.world.isWater(x, z)) g.fx.puff(x, g.world.waterLevel, z, 0.8, true, 5);
       else g.fx.dust(x, z, 1);
     } else {
       g.fx.spark(x, y, z, 2);
@@ -177,8 +176,8 @@ export class Projectiles {
           if (d.splash === 0 && p.team === 'player') g.damageBuilding(b, p.dmg * 0.3);
           this.explode(p, p.pos.x, p.pos.y, p.pos.z);
           hit = true;
-        } else if (p.pos.y <= 0.15) {
-          this.explode(p, p.pos.x, Math.max(p.pos.y, 0), p.pos.z);
+        } else if (p.pos.y <= (p.groundY = g.fx.ground(p.pos.x, p.pos.z)) + 0.15) {
+          this.explode(p, p.pos.x, Math.max(p.pos.y, p.groundY), p.pos.z);
           hit = true;
         } else if (p.life <= 0) {
           if (d.flak || d.rocket) this.explode(p, p.pos.x, p.pos.y, p.pos.z);
